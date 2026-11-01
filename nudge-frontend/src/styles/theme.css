@@ -1,0 +1,165 @@
+:root {
+  --bg: #E4E8E2;
+  --panel: #FDFDFB;
+  --side: #F6F7F3;
+  --wall: #EEF0EA;
+  --ink: #121C18;
+  --muted: #65726B;
+  --line: #E1E5DF;
+  --accent: #0F6B58;
+  --accent-ink: #FFFFFF;
+  --them: #FFFFFF;
+  --them-bd: #E3E7E1;
+  --vanish: #DF4B2F;
+  --hover: #EAEDE7;
+  --ok: #25A06C;
+  --shadow: 0 18px 50px rgba(18, 28, 24, 0.14);
+  --like: #D8483C;
+  --signal: #E0553A;
+  --gold: #9C7216;
+  --gold-hi: #EBC15E;
+  --tickr: #F6DC96;
+  --aired: #B45309;
+  --aired-bg: rgba(245, 158, 11, 0.14);
+  --aired-bd: rgba(217, 119, 6, 0.38);
+  --sir-bg: #08110E;
+  --sir-ink: #EEF5F1;
+  --sir-mut: #93A39A;
+  --sir-line: rgba(255, 255, 255, 0.14);
+  --sir-card: rgba(255, 255, 255, 0.06);
+  --font-family: 'Geist', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+:root[data-theme="dark"] {
+  --bg: #070B09;
+  --panel: #0F1512;
+  --side: #0C110F;
+  --wall: #090E0C;
+  --ink: #E8EFEA;
+  --muted: #8A988F;
+  --line: #1B2520;
+  --accent: #3FBB9D;
+  --accent-ink: #04140F;
+  --them: #16201C;
+  --them-bd: #1F2A25;
+  --vanish: #FF7B5E;
+  --hover: #16201B;
+  --ok: #4FCB92;
+  --shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+  --like: #F0675B;
+  --signal: #FF7A5C;
+  --gold: #E3B65A;
+  --gold-hi: #E8BE62;
+  --tickr: #0A4A3A;
+  --aired: #FBBF24;
+  --aired-bg: rgba(251, 191, 36, 0.14);
+  --aired-bd: rgba(251, 191, 36, 0.38);
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  height: 100%;
+  width: 100%;
+  font-family: var(--font-family);
+  background-color: var(--bg);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+button {
+  cursor: pointer;
+  background: none;
+  border: 0;
+  font: inherit;
+  color: inherit;
+}
+
+input, textarea {
+  font: inherit;
+  color: inherit;
+  border: none;
+  outline: none;
+}
+
+/* App container */
+.app-container {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+  background: var(--bg);
+  padding: 16px;
+  justify-content: center;
+  align-items: center;
+}
+
+.app-frame {
+  display: flex;
+  width: 100%;
+  max-width: 1200px;
+  height: 100%;
+  max-height: 900px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: var(--shadow);
+  position: relative;
+}
+
+@media (max-width: 768px) {
+  .app-container {
+    padding: 0;
+  }
+  .app-frame {
+    max-height: 100%;
+    border-radius: 0;
+    border: none;
+  }
+}
+
+/* Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+}
+
+/* Animations */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes pulse {
+  0% { transform: scale(0.95); opacity: 0.8; }
+  50% { transform: scale(1.05); opacity: 1; }
+  100% { transform: scale(0.95); opacity: 0.8; }
+}
+
+@keyframes radarWave {
+  0% { transform: scale(0.2); opacity: 0.9; }
+  100% { transform: scale(2.4); opacity: 0; }
+}
+
+.radar-ring {
+  position: absolute;
+  border-radius: 50%;
+  border: 1px solid rgba(63, 187, 157, 0.4);
+  animation: radarWave 3s infinite cubic-bezier(0.2, 0.8, 0.4, 1);
+}

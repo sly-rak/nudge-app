@@ -1,0 +1,6 @@
+packages:
+  - 'packages/*'
+  - 'nudge-backend'
+  - 'nudge-frontend'
+allowBuilds:
+  esbuild: true

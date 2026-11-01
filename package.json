@@ -1,0 +1,18 @@
+{
+  "name": "nudge-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Nudge - Messaging and social app for talking, organising, sharing and playing with friends.",
+  "scripts": {
+    "dev": "pnpm --filter @nudge/backend dev & pnpm --filter @nudge/frontend dev",
+    "dev:all": "concurrently \"pnpm --filter @nudge/backend dev\" \"pnpm --filter @nudge/frontend dev\"",
+    "dev:backend": "pnpm --filter @nudge/backend dev",
+    "dev:frontend": "pnpm --filter @nudge/frontend dev",
+    "build": "pnpm --filter @nudge/shared build && pnpm --filter @nudge/backend build && pnpm --filter @nudge/frontend build",
+    "db:seed": "pnpm --filter @nudge/backend db:seed"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "typescript": "^5.7.2"
+  }
+}
