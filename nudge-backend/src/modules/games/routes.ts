@@ -31,6 +31,13 @@ export const gameRoutes: FastifyPluginAsync = async (fastify) => {
           players: 2,
         },
         {
+          key: 'rps',
+          name: 'Rock Paper Scissors',
+          description: 'Best-of-three quick reflex duel',
+          icon: 'Hand',
+          players: 2,
+        },
+        {
           key: 'wordguess',
           name: 'Word Guess',
           description: 'Guess the secret 5-letter word in 6 tries',
@@ -59,6 +66,17 @@ export const gameRoutes: FastifyPluginAsync = async (fastify) => {
       }
     }
 
+    // Default to Tola if still no opponent specified
+    if (!targetOpponentId) {
+      const defaultBot = await query(
+        `SELECT id FROM users WHERE (username = 'tola' OR is_bot = true) AND id != $1 ORDER BY (username = 'tola') DESC LIMIT 1`,
+        [decoded.id]
+      );
+      if (defaultBot.rowCount && defaultBot.rowCount > 0) {
+        targetOpponentId = defaultBot.rows[0].id;
+      }
+    }
+
     let initialState: Record<string, any> = {};
     if (gameKey === 'tictactoe') {
       initialState = {
@@ -66,6 +84,22 @@ export const gameRoutes: FastifyPluginAsync = async (fastify) => {
         turn: 'X',
         playerX: decoded.id,
         playerO: targetOpponentId || null,
+      };
+    } else if (gameKey === 'connect4') {
+      initialState = {
+        board: Array(42).fill(null),
+        turn: 'red',
+        playerRed: decoded.id,
+        playerYellow: targetOpponentId || null,
+        lastMove: null,
+      };
+    } else if (gameKey === 'rps') {
+      initialState = {
+        rounds: [],
+        playerUser: decoded.id,
+        playerOpp: targetOpponentId || null,
+        userScore: 0,
+        oppScore: 0,
       };
     } else if (gameKey === 'wordguess') {
       initialState = {
@@ -85,6 +119,21 @@ export const gameRoutes: FastifyPluginAsync = async (fastify) => {
 
     const session = res.rows[0];
 
+    // Fetch opponent info
+    let opponent = null;
+    if (targetOpponentId) {
+      const oppRes = await query(
+        `SELECT id, username, display_name as "displayName", bio,
+                avatar_url as "avatarUrl", avatar_kind as "avatarKind",
+                is_bot as "isBot", bot_persona as "botPersona"
+         FROM users WHERE id = $1`,
+        [targetOpponentId]
+      );
+      if (oppRes.rowCount && oppRes.rowCount > 0) {
+        opponent = oppRes.rows[0];
+      }
+    }
+
     // If game has conversation, send system/game invitation message in conversation
     if (conversationId) {
       const seqRes = await query(
@@ -97,7 +146,7 @@ export const gameRoutes: FastifyPluginAsync = async (fastify) => {
         `INSERT INTO messages (conversation_id, seq, sender_id, type, body, created_at)
          VALUES ($1, $2, $3, 'game', $4, NOW())
          RETURNING *`,
-        [conversationId, nextSeq, decoded.id, `Started a game of Tic-Tac-Toe! 🎮`]
+        [conversationId, nextSeq, decoded.id, `Started a game of ${gameKey === 'tictactoe' ? 'Tic-Tac-Toe' : gameKey === 'connect4' ? 'Four in a Row' : gameKey === 'rps' ? 'Rock Paper Scissors' : 'Word Guess'}! 🎮`]
       );
 
       const senderRes = await query('SELECT display_name as "displayName" FROM users WHERE id = $1', [decoded.id]);
@@ -114,7 +163,7 @@ export const gameRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
 
-    return { session };
+    return { session, opponent };
   });
 
   // Get game session
@@ -134,10 +183,26 @@ export const gameRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.status(404).send({ error: { code: 'NOT_FOUND', message: 'Game session not found' } });
     }
 
-    return { session: res.rows[0] };
+    const session = res.rows[0];
+    let opponent = null;
+    const oppId = session.state?.playerO || session.state?.playerYellow || session.state?.playerOpp;
+    if (oppId) {
+      const oppRes = await query(
+        `SELECT id, username, display_name as "displayName", bio,
+                avatar_url as "avatarUrl", avatar_kind as "avatarKind",
+                is_bot as "isBot", bot_persona as "botPersona"
+         FROM users WHERE id = $1`,
+        [oppId]
+      );
+      if (oppRes.rowCount && oppRes.rowCount > 0) {
+        opponent = oppRes.rows[0];
+      }
+    }
+
+    return { session, opponent };
   });
 
-  // Make move via REST (also supported via websocket)
+  // Make move via REST
   fastify.post('/sessions/:id/move', async (request, reply) => {
     const decoded = request.user as { id: string };
     const { id } = request.params as { id: string };
@@ -149,11 +214,11 @@ export const gameRoutes: FastifyPluginAsync = async (fastify) => {
     }
     const session = sessionRes.rows[0];
 
-    // If tictactoe move: { index: number }
     let updatedState = { ...session.state, ...move };
     let winnerId = session.winner_id;
     let status = session.status;
 
+    // 1. TIC-TAC-TOE
     if (session.game_key === 'tictactoe' && typeof move.index === 'number') {
       const board: (string | null)[] = session.state.board ? [...session.state.board] : Array(9).fill(null);
       const currentTurn = session.state.turn || 'X';
@@ -182,6 +247,49 @@ export const gameRoutes: FastifyPluginAsync = async (fastify) => {
         const nextTurn = currentTurn === 'X' ? 'O' : 'X';
         updatedState = { ...session.state, board, turn: nextTurn };
       }
+    }
+
+    // 2. ROCK PAPER SCISSORS
+    if (session.game_key === 'rps' && move.rps) {
+      const choices = ['rock', 'paper', 'scissors'];
+      const userChoice = move.rps.toLowerCase();
+      const oppChoice = choices[Math.floor(Math.random() * choices.length)];
+
+      let roundWinner = 'draw';
+      if (
+        (userChoice === 'rock' && oppChoice === 'scissors') ||
+        (userChoice === 'paper' && oppChoice === 'rock') ||
+        (userChoice === 'scissors' && oppChoice === 'paper')
+      ) {
+        roundWinner = 'user';
+      } else if (userChoice !== oppChoice) {
+        roundWinner = 'opponent';
+      }
+
+      const prevRounds = session.state.rounds || [];
+      const newRound = { user: userChoice, opp: oppChoice, winner: roundWinner };
+      const allRounds = [...prevRounds, newRound];
+
+      const userScore = allRounds.filter(r => r.winner === 'user').length;
+      const oppScore = allRounds.filter(r => r.winner === 'opponent').length;
+
+      if (userScore >= 2) {
+        winnerId = decoded.id;
+        status = 'completed';
+      } else if (oppScore >= 2) {
+        winnerId = session.state.playerOpp;
+        status = 'completed';
+      } else if (allRounds.length >= 5) {
+        winnerId = userScore > oppScore ? decoded.id : userScore < oppScore ? session.state.playerOpp : null;
+        status = 'completed';
+      }
+
+      updatedState = {
+        ...session.state,
+        rounds: allRounds,
+        userScore,
+        oppScore,
+      };
     }
 
     await query(

@@ -336,6 +336,26 @@ export const App: React.FC = () => {
                 <GamesCenter
                   isEmbedded={true}
                   conversationId={selectedConversation?.id}
+                  initialOpponent={
+                    (selectedConversation as any)?.otherUser
+                      ? {
+                          id: (selectedConversation as any).otherUser.id,
+                          username: (selectedConversation as any).otherUser.username,
+                          displayName: (selectedConversation as any).otherUser.displayName,
+                          avatarUrl: (selectedConversation as any).otherUser.avatarUrl,
+                          bio: (selectedConversation as any).otherUser.bio,
+                          isBot: (selectedConversation as any).otherUser.isBot,
+                          botPersona: (selectedConversation as any).otherUser.botPersona,
+                        }
+                      : selectedConversation?.title
+                      ? {
+                          id: selectedConversation.id,
+                          username: selectedConversation.title.toLowerCase(),
+                          displayName: selectedConversation.title,
+                          avatarUrl: selectedConversation.avatarUrl,
+                        }
+                      : undefined
+                  }
                 />
               )}
 

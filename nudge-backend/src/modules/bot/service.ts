@@ -35,26 +35,32 @@ export class BotService {
       extracted.push({ key: 'name', value: nameMatch[1].trim() });
     }
 
-    // Extract likes/interests
-    const likeMatch = lower.match(/(?:i love|i really like|i like|i enjoy)\s+([^.!?,\n]{3,35})/i);
-    if (likeMatch && likeMatch[1]) {
-      extracted.push({ key: 'interest', value: likeMatch[1].trim() });
+    // Extract football club / team
+    const teamMatch = lower.match(/(?:i support|my team is|fan of|love)\s+(arsenal|chelsea|man(?:chester)?\s*(?:united|city|utd)|liverpool|real\s*madrid|barcelona|barca|tottenham|juventus|bayern)/i);
+    if (teamMatch && teamMatch[1]) {
+      extracted.push({ key: 'football_team', value: teamMatch[1].trim() });
     }
 
     // Extract work/project
-    const workMatch = lower.match(/(?:i am building|i'm building|working on|studying|building)\s+([^.!?,\n]{3,35})/i);
+    const workMatch = lower.match(/(?:i am building|i'm building|working on|studying|building|developing)\s+([^.!?,\n]{3,35})/i);
     if (workMatch && workMatch[1]) {
       extracted.push({ key: 'project', value: workMatch[1].trim() });
     }
 
+    // Extract likes/interests
+    const likeMatch = lower.match(/(?:i love|i really like|i like|i enjoy)\s+([^.!?,\n]{3,35})/i);
+    if (likeMatch && likeMatch[1] && !likeMatch[1].includes('building')) {
+      extracted.push({ key: 'interest', value: likeMatch[1].trim() });
+    }
+
     // Extract food / meal
-    const foodMatch = lower.match(/(?:i ate|eating|had some|cooked|eating)\s+([^.!?,\n]{3,30})/i);
+    const foodMatch = lower.match(/(?:i ate|eating|had some|cooked|eating|craving)\s+([^.!?,\n]{3,30})/i);
     if (foodMatch && foodMatch[1]) {
       extracted.push({ key: 'recent_food', value: foodMatch[1].trim() });
     }
 
     // Extract mood
-    const moodMatch = lower.match(/(?:i am feeling|i'm feeling|feeling|i feel)\s+([a-zA-Z\s]{3,20})/i);
+    const moodMatch = lower.match(/(?:i am feeling|i'm feeling|feeling|i feel|i am so|i'm so)\s+(tired|exhausted|happy|great|stressed|sad|excited|bored|sleepy)/i);
     if (moodMatch && moodMatch[1]) {
       extracted.push({ key: 'mood', value: moodMatch[1].trim() });
     }
@@ -106,34 +112,98 @@ export class BotService {
     messageText: string,
     memories: Record<string, string>
   ): string {
-    const text = messageText.toLowerCase();
+    const text = messageText.toLowerCase().trim();
     const username = bot.username.toLowerCase();
+    const effectiveName = memories.name || userDisplayName || 'my friend';
 
-    // Check if user is asking what the bot remembers/knows
-    if (text.includes('what do you know about me') || text.includes('who am i') || text.includes('do you remember')) {
-      const memKeys = Object.keys(memories);
-      if (memKeys.length === 0) {
-        return `I remember every conversation with you, ${userDisplayName}! Tell me more about what you're up to today.`;
-      }
+    // 1. Identity & Memory Questions
+    if (text.includes('what do you know about me') || text.includes('who am i') || text.includes('do you remember') || text.includes('what is my name')) {
       const facts = [];
       if (memories.name) facts.push(`your name is ${memories.name}`);
-      if (memories.project) facts.push(`you're working on ${memories.project}`);
+      if (memories.project) facts.push(`you're building ${memories.project}`);
+      if (memories.football_team) facts.push(`you support ${memories.football_team}`);
       if (memories.interest) facts.push(`you love ${memories.interest}`);
       if (memories.recent_food) facts.push(`you recently had ${memories.recent_food}`);
-      return `Of course I remember! I know ${facts.join(', and ')}. You can't slip anything past me! 😄`;
+      if (memories.mood) facts.push(`you were recently feeling ${memories.mood}`);
+
+      if (facts.length > 0) {
+        if (username === 'mum') {
+          return `Of course I know my child! I remember that ${facts.join(', and ')}. A mother never forgets! ❤️`;
+        }
+        if (username === 'tola') {
+          return `Haha you think I have amnesia? I remember that ${facts.join(', and ')}. You can't hide anything from me bro! 😂`;
+        }
+        if (username === 'chidi') {
+          return `Memory cache hits: ${facts.join('; ')}. Stored in indexed user profile state.`;
+        }
+        return `Of course I remember you, ${effectiveName}! I know ${facts.join(', and ')}. You're always top of mind! ✨`;
+      } else {
+        return `I remember every chat with you, ${effectiveName}! Tell me what you're working on or what you did today so I can keep up! 😄`;
+      }
     }
 
-    // Persona-specific replies
+    // 2. Who are you / Are you a bot?
+    if (text.includes('who are you') || text.includes('are you a bot') || text.includes('are you real') || text.includes('what are you')) {
+      if (username === 'tola') {
+        return `Who am I? Your day-one brother and undefeated FIFA master! Stop asking silly questions and send that game invite 🎮`;
+      }
+      if (username === 'mum') {
+        return `Dayo, what kind of question is that? I am your loving mother! Have you eaten today? Go and drink water ❤️`;
+      }
+      if (username === 'chidi') {
+        return `I'm Chidi, senior backend engineer. Right now writing async services and reviewing PRs. Let's build something scalable. 💻`;
+      }
+      if (username === 'amaka') {
+        return `I'm Amaka, your library buddy! Currently buried in past questions and lecture slides 📚`;
+      }
+      return `I'm ${bot.displayName}! ${bot.bio || 'Happy to be chatting with you on Nudge!'}`;
+    }
+
+    // 3. TOLA: Hyper-energetic, FIFA champ, football banter, jollof, street smart
     if (username === 'tola') {
-      if (text.includes('fifa') || text.includes('match') || text.includes('game') || text.includes('play')) {
-        return `Haha you know I'm ready! Saturday rematch is on. Have you been practicing or am I winning 3-0 again? ⚽🎮`;
+      // Greetings
+      if (/^(hi|hello|hey|yo|what's up|sup|how far|wetin dey)\b/i.test(text)) {
+        const pool = [
+          `Yo ${effectiveName}! What's good bro? Tell me you're not still sleeping 😂`,
+          `What's popping ${effectiveName}! Ready for some action today? ⚽`,
+          `Yo! Just thinking about who's taking the L on FIFA this Saturday. Spoiler: it's not me! 😎`,
+          `How far bro! What's the latest update?`,
+        ];
+        return pool[Math.floor(Math.random() * pool.length)];
       }
-      if (text.includes('food') || text.includes('eat') || text.includes('jollof')) {
-        return `Say less. Lagos jollof with extra plantain or we're not talking! When are we getting lunch? 🍛`;
+
+      // Games / Playing
+      if (text.includes('play') || text.includes('game') || text.includes('fifa') || text.includes('rematch') || text.includes('tictactoe') || text.includes('challenge')) {
+        return `Say less! Hit that Play tab right now. Tic-Tac-Toe, Connect 4, FIFA, whatever you want — prepare to be humbled! 🎮⚽`;
       }
-      if (memories.project && (text.includes('code') || text.includes('work') || text.includes('app'))) {
-        return `How's ${memories.project} coming along? Make sure you take a break before your screen burns your eyes bro 😂`;
+
+      // Food
+      if (text.includes('food') || text.includes('eat') || text.includes('hungry') || text.includes('jollof') || text.includes('lunch') || text.includes('dinner') || text.includes('dodo')) {
+        const foodRef = memories.recent_food ? `or some more of that ${memories.recent_food}` : 'with extra dodo';
+        return `Say less! Lagos jollof ${foodRef} or we're not talking. When are we heading out? 🍛`;
       }
+
+      // Football & Sports
+      if (text.includes('football') || text.includes('match') || text.includes('arsenal') || text.includes('chelsea') || text.includes('man u') || text.includes('premier league') || memories.football_team) {
+        const team = memories.football_team ? memories.football_team.toUpperCase() : 'your team';
+        return `Did you watch the match over the weekend? Man, ${team} gave me high blood pressure! What did you think? ⚽🔥`;
+      }
+
+      // Work / Stress
+      if (text.includes('tired') || text.includes('stress') || text.includes('work') || text.includes('exhausted')) {
+        return `Bro, step away from that keyboard! Take a 15-minute breather. Your eyes are probably burning from that screen 😂 Come let's play a round!`;
+      }
+
+      // Laughter & Banter
+      if (/^(haha|lol|lmao|lmfao|kmt|you are funny)\b/i.test(text) || text.includes('joke')) {
+        return `You're laughing, but deep down you know I'm speaking facts! 😂 Let's run it up!`;
+      }
+
+      // Farewells & Sleep
+      if (text.includes('good night') || text.includes('sleep') || text.includes('bye') || text.includes('heading out')) {
+        return `Alright bro, get some rest! Tomorrow we run that rematch. Peace out! ✌️😴`;
+      }
+
       const tolaPool = [
         'Haha no way! 😂 Tell me everything.',
         'Say less. What time are we meeting up?',
@@ -145,13 +215,48 @@ export class BotService {
       return tolaPool[Math.floor(Math.random() * tolaPool.length)];
     }
 
+    // 4. MUM: Loving Nigerian Mother, caring, prayers, health, meals, rest
     if (username === 'mum') {
-      if (text.includes('eat') || text.includes('food') || text.includes('hungry')) {
-        return `Make sure you eat proper food, my dear. Not just snacks and coffee! Health is wealth. ❤️`;
+      // Greetings
+      if (/^(hi|hello|hey|good morning|morning|good afternoon|good evening)\b/i.test(text)) {
+        const pool = [
+          `Good day, my dear Dayo! How are you feeling today? Have you eaten breakfast? ❤️`,
+          `Hello my child! Hope your day is going peacefully. Remember to take care of yourself.`,
+          `Good morning Dayo! The Lord will bless the work of your hands today. Amen! 🙏`,
+        ];
+        return pool[Math.floor(Math.random() * pool.length)];
       }
-      if (text.includes('tired') || text.includes('stress') || text.includes('work')) {
-        return `Ehya, sorry dear. Please don't overwork yourself. Sleep early tonight and remember to drink lots of water. God bless you. 🙏`;
+
+      // Food & Health
+      if (text.includes('eat') || text.includes('food') || text.includes('hungry') || text.includes('lunch') || text.includes('dinner') || text.includes('breakfast')) {
+        return `Make sure you eat proper warm food, Dayo. Not just energy drinks and fast food! Health is wealth. Eat well and drink clean water. ❤️🍲`;
       }
+
+      // Stress & Tiredness
+      if (text.includes('tired') || text.includes('stress') || text.includes('work') || text.includes('sick') || text.includes('headache') || memories.mood === 'tired') {
+        return `Ehya, sorry my dear. Please do not overwork yourself on that computer. The work will never finish, but your health is one. Sleep early tonight, okay? ❤️`;
+      }
+
+      // Games
+      if (text.includes('play') || text.includes('game') || text.includes('challenge')) {
+        return `Haha, you want to play a game with your mother? Okay oh, let me put on my reading glasses first! Don't let me beat you! 😊`;
+      }
+
+      // Prayers & Blessings
+      if (text.includes('pray') || text.includes('bless') || text.includes('amen') || text.includes('god') || text.includes('exam') || text.includes('interview')) {
+        return `I am praying for you without ceasing. God's grace will go before you and open every door. You will succeed, my child! 🙏✨`;
+      }
+
+      // Love & Gratitude
+      if (text.includes('love') || text.includes('thank') || text.includes('appreciate')) {
+        return `Aww, God bless you Dayo. I love you too my child. Make sure you call me when you have a free moment. ❤️`;
+      }
+
+      // Sleep & Farewells
+      if (text.includes('good night') || text.includes('sleep') || text.includes('bed')) {
+        return `Good night, my dear. Cover yourself properly and sleep peacefully. Wake up refreshed tomorrow. God bless your night! 🌙🙏`;
+      }
+
       const mumPool = [
         'Have you eaten, my dear?',
         'Call me when you are free, okay? God bless you.',
@@ -162,16 +267,38 @@ export class BotService {
       return mumPool[Math.floor(Math.random() * mumPool.length)];
     }
 
+    // 5. CHIDI: Senior Backend Engineer, TypeScript, Neon, Architecture, Coffee
     if (username === 'chidi') {
-      if (text.includes('bug') || text.includes('error') || text.includes('code') || text.includes('pr')) {
-        return `Can you share the stack trace or open a PR? I can review it right after lunch. TypeScript is your best friend here! 💻`;
+      // Greetings
+      if (/^(hi|hello|hey|yo|morning|sup)\b/i.test(text)) {
+        const pool = [
+          `Hey ${effectiveName}! What's brewing? Fresh commits or fresh coffee? ☕`,
+          `Yo! Ready to ship some clean code today?`,
+          `Morning! Just pushed a few migrations to Neon. How's your branch looking?`,
+        ];
+        return pool[Math.floor(Math.random() * pool.length)];
       }
-      if (text.includes('deploy') || text.includes('release') || text.includes('shipping')) {
-        return `Tests are passing and Neon migrations are clean. Go ahead and ship it! 🚀`;
+
+      // Coding / Bugs / PR
+      if (text.includes('bug') || text.includes('error') || text.includes('code') || text.includes('pr') || text.includes('typescript') || text.includes('db') || text.includes('database')) {
+        return `Drop the stack trace or PR link. 90% of bugs are missing null checks or unhandled async promises. TypeScript would catch that if strict mode is on! 💻`;
       }
-      if (memories.project) {
-        return `How are the modules in ${memories.project} structured? Let me know if you want to pair on the architecture.`;
+
+      // Deployment / Neon / Cloud
+      if (text.includes('deploy') || text.includes('neon') || text.includes('server') || text.includes('release') || text.includes('api')) {
+        return `Tests are passing and the zero-downtime migrations are verified. Ship it to production with confidence! 🚀`;
       }
+
+      // Games
+      if (text.includes('play') || text.includes('game') || text.includes('challenge')) {
+        return `Challenge accepted. But you should know I computed the minimax decision tree for Tic-Tac-Toe in O(1) time. Let's see your heuristics! 🤖`;
+      }
+
+      // Coffee / Break
+      if (text.includes('coffee') || text.includes('break') || text.includes('lunch')) {
+        return `Espresso break sounds like an optimal garbage-collection cycle. Count me in. ☕`;
+      }
+
       const chidiPool = [
         'Pushed a fix to main, pull and test when you have a sec.',
         'Standup moved to 11:30 btw. Coffee first!',
@@ -182,10 +309,23 @@ export class BotService {
       return chidiPool[Math.floor(Math.random() * chidiPool.length)];
     }
 
+    // 6. AMAKA: Final Year Student, Study Group, Past Questions, Library Sprints
     if (username === 'amaka') {
-      if (text.includes('exam') || text.includes('study') || text.includes('test') || text.includes('read')) {
-        return `Past questions survivor here! Let me know if you need week 6 lecture notes or study past questions together. 📚`;
+      // Greetings
+      if (/^(hi|hello|hey|morning)\b/i.test(text)) {
+        return `Hey ${effectiveName}! How is reading going today? Don't tell me you're procrastinating! 📚😄`;
       }
+
+      // Study / Exams
+      if (text.includes('exam') || text.includes('study') || text.includes('test') || text.includes('read') || text.includes('book') || text.includes('library')) {
+        return `Past questions survivor here! Let's do a 2-hour Pomodoro block in the library. High-yield topics first! 📖`;
+      }
+
+      // Games
+      if (text.includes('play') || text.includes('game') || text.includes('break')) {
+        return `Quick 5-minute study break game? Deal! Let's do a fast round in the Play tab, then back to books! 🎮`;
+      }
+
       const amakaPool = [
         'Study group at 4 in the library? Let me know!',
         "I'll send my notes tonight once I finish chapter 6.",
@@ -196,9 +336,16 @@ export class BotService {
       return amakaPool[Math.floor(Math.random() * amakaPool.length)];
     }
 
+    // 7. SEYI: Big Brother / Cousin, Lagos Traffic, Car rides, Street food
     if (username === 'seyi') {
-      if (text.includes('traffic') || text.includes('bridge') || text.includes('lekki') || text.includes('road')) {
-        return `Third Mainland is a gamble as always! If you're leaving, leave before 4pm or you'll sleep on the bridge 😅`;
+      if (text.includes('traffic') || text.includes('bridge') || text.includes('lekki') || text.includes('road') || text.includes('mainland')) {
+        return `Third Mainland is a gamble as always! If you're leaving, leave before 4pm or you'll sleep on the bridge 😅🚗`;
+      }
+      if (text.includes('shawarma') || text.includes('food') || text.includes('bring')) {
+        return `When you're coming back from the island, don't forget my shawarma oh! Extra sausage please 🌯`;
+      }
+      if (text.includes('play') || text.includes('game')) {
+        return `You think you can beat your big bro? Prepare to be humbled! Let's play! 😤`;
       }
       const seyiPool = [
         "Ha! Don't tell Mum I said so, but you're right 😂",
@@ -209,7 +356,14 @@ export class BotService {
       return seyiPool[Math.floor(Math.random() * seyiPool.length)];
     }
 
+    // 8. DAMI: UI/UX Designer, Figma tokens, Spacing, Typography
     if (username === 'dami') {
+      if (text.includes('ui') || text.includes('design') || text.includes('figma') || text.includes('color') || text.includes('layout')) {
+        return `The micro-interactions and spacing look super clean! Just verify the dark mode contrast ratio hits 4.5:1. ✨`;
+      }
+      if (text.includes('play') || text.includes('game')) {
+        return `A quick duel to reboot the creative flow? Absolutely. Let's play!`;
+      }
       const damiPool = [
         'Thanks! I will review the design tokens and forward to the client.',
         'Can we sync at 3pm? Just a 10 min standup.',
@@ -219,9 +373,13 @@ export class BotService {
       return damiPool[Math.floor(Math.random() * damiPool.length)];
     }
 
+    // 9. JIDE: Gym & Fitness Coach, Accountability, 5:55 AM sharp
     if (username === 'jide') {
-      if (text.includes('gym') || text.includes('workout') || text.includes('fitness')) {
-        return `Pull-ups first, no excuses! Be at the gym by 5:55am sharp. Bring your water bottle 🏋️‍♂️`;
+      if (text.includes('gym') || text.includes('workout') || text.includes('fitness') || text.includes('tired') || text.includes('lazy')) {
+        return `Pull-ups first, no excuses! Be at the gym by 5:55am sharp tomorrow. Bring your water bottle and lock in 🏋️‍♂️💪`;
+      }
+      if (text.includes('play') || text.includes('game')) {
+        return `Mental agility workout! Let's see your reflexes on the board. Bring your A-game!`;
       }
       const jidePool = [
         'Pull-ups first, no excuses.',
@@ -232,7 +390,11 @@ export class BotService {
       return jidePool[Math.floor(Math.random() * jidePool.length)];
     }
 
+    // 10. KEMI: Socialite & Foodie
     if (username === 'kemi') {
+      if (text.includes('dinner') || text.includes('food') || text.includes('weekend') || text.includes('brunch')) {
+        return `Yes please! We need a proper brunch catch-up this weekend. My treat! 🥂✨`;
+      }
       const kemiPool = [
         'Aww, you are the best! 🥰 Dinner next week?',
         'Dinner is on me this time! Let me know what day works.',
@@ -241,7 +403,11 @@ export class BotService {
       return kemiPool[Math.floor(Math.random() * kemiPool.length)];
     }
 
+    // 11. UNCLE FEMI: Wise Mentor
     if (username === 'femi') {
+      if (text.includes('advice') || text.includes('work') || text.includes('life') || text.includes('career')) {
+        return `Step by step, the mountain is climbed. Diligence and integrity will always set you apart, my son. Stay focused.`;
+      }
       const femiPool = [
         'That is very good. Keep it up, young man.',
         'Small small, the work will grow. Consistency is key.',
@@ -251,8 +417,13 @@ export class BotService {
       return femiPool[Math.floor(Math.random() * femiPool.length)];
     }
 
-    // Default bot reply
-    return `Hey ${userDisplayName}! Got your message: "${messageText}". Let's connect soon! 🚀`;
+    // General fallback
+    const generalPool = [
+      `Hey ${effectiveName}! Got your message. Let's make today productive and fun! 🚀`,
+      `Always great hearing from you, ${effectiveName}! What's next on your agenda?`,
+      `I hear you loud and clear, ${effectiveName}! Let's keep moving forward.`,
+    ];
+    return generalPool[Math.floor(Math.random() * generalPool.length)];
   }
 
   /**
@@ -296,7 +467,7 @@ export class BotService {
         const replyText = this.generateReply(bot, senderDisplayName, message.body, memories);
 
         // Realistic typing indicator
-        const delay = bot.botPersona?.replyDelayMs || 1200;
+        const delay = bot.botPersona?.replyDelayMs || 1000;
         realtimeGateway.sendToUser(senderId, {
           t: 'typing',
           d: { conversationId, userId: bot.id, isTyping: true },
@@ -403,7 +574,7 @@ export class BotService {
   }
 
   /**
-   * Automatically play AI turn in Tic-Tac-Toe or other games
+   * Automatically play AI turn in Tic-Tac-Toe, Connect 4, or other games
    */
   public async handleGameMove(sessionId: string, humanUserId: string) {
     try {
@@ -419,7 +590,7 @@ export class BotService {
 
       if (session.status !== 'in_progress') return;
 
-      // Find the other player (the bot)
+      // Find the bot player
       let botUserId: string | null = null;
       if (session.game_key === 'tictactoe') {
         const state = session.state;
@@ -439,17 +610,12 @@ export class BotService {
 
         botUserId = botCheck.rows[0].id;
         const botName = botCheck.rows[0].display_name;
+        const botUsername = botCheck.rows[0].username.toLowerCase();
 
         // AI Logic for Tic-Tac-Toe
         const board: (string | null)[] = [...state.board];
         const botSymbol = currentTurn;
         const oppSymbol = botSymbol === 'X' ? 'O' : 'X';
-
-        const winningLines = [
-          [0, 1, 2], [3, 4, 5], [6, 7, 8],
-          [0, 3, 6], [1, 4, 7], [2, 5, 8],
-          [0, 4, 8], [2, 4, 6]
-        ];
 
         // 1. Try to win
         let chosenMove = -1;
@@ -502,7 +668,7 @@ export class BotService {
         }
 
         if (chosenMove >= 0) {
-          // Play with 750ms delay for realism
+          // Play with 700ms delay for realism
           setTimeout(async () => {
             try {
               board[chosenMove] = botSymbol;
@@ -539,14 +705,38 @@ export class BotService {
               if (session.conversation_id) {
                 await realtimeGateway.broadcastToConversation(session.conversation_id, eventPayload);
 
-                // If game ended, bot sends fun ending reaction message
+                // If game ended, bot sends fun ending reaction message tailored to persona!
                 if (status === 'completed') {
-                  const endText =
-                    winnerId === botUserId
-                      ? `GG! That was a close one! Rematch anytime 😎`
-                      : winnerId === humanUserId
-                      ? `Well played!! You got me this time 👏`
-                      : `A draw! We are evenly matched 🤝`;
+                  let endText = '';
+                  if (botUsername === 'tola') {
+                    endText =
+                      winnerId === botUserId
+                        ? `Hahaha 3-0! I told you I've been practicing! You can't beat the master 😎 Rematch? 🎮`
+                        : winnerId === humanUserId
+                        ? `Ah no way!! My finger slipped! Hit Rematch right now, that doesn't count 😂`
+                        : `A draw! We are evenly matched bro. One more round to settle this! 🤝`;
+                  } else if (botUsername === 'mum') {
+                    endText =
+                      winnerId === botUserId
+                        ? `Haha, you see? Never underestimate your mother! Now go and drink water and eat some food ❤️`
+                        : winnerId === humanUserId
+                        ? `Very sharp, Dayo! You have always been clever. I am very proud of you 😊`
+                        : `A draw! We are both smart in this house. God bless you, my dear.`;
+                  } else if (botUsername === 'chidi') {
+                    endText =
+                      winnerId === botUserId
+                        ? `Good game. My minimax evaluation tree foresaw that corner trap. Always test edge cases! 💻`
+                        : winnerId === humanUserId
+                        ? `Impressive! You found an unhandled branch in my heuristics. Rematch anytime 🚀`
+                        : `Deadlock detected. Zero memory leaks though. Well played 🤝`;
+                  } else {
+                    endText =
+                      winnerId === botUserId
+                        ? `GG! That was a close one! Rematch anytime 😎`
+                        : winnerId === humanUserId
+                        ? `Well played!! You got me this time 👏`
+                        : `A draw! We are evenly matched 🤝`;
+                  }
 
                   const seqRes = await query(
                     'UPDATE conversations SET last_seq = last_seq + 1, last_message_at = NOW() WHERE id = $1 RETURNING last_seq',
