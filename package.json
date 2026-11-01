@@ -4,7 +4,7 @@
   "private": true,
   "description": "Nudge - Messaging and social app for talking, organising, sharing and playing with friends.",
   "scripts": {
-    "dev": "pnpm --filter @nudge/backend dev & pnpm --filter @nudge/frontend dev",
+    "dev": "concurrently -k -p \"[{name}]\" -n \"backend,frontend\" -c \"cyan.bold,green.bold\" \"pnpm --filter @nudge/backend dev\" \"pnpm --filter @nudge/frontend dev\"",
     "dev:all": "concurrently \"pnpm --filter @nudge/backend dev\" \"pnpm --filter @nudge/frontend dev\"",
     "dev:backend": "pnpm --filter @nudge/backend dev",
     "dev:frontend": "pnpm --filter @nudge/frontend dev",
