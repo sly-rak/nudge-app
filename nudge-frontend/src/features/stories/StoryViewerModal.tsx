@@ -1,25 +1,33 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../../services/api.js';
 import { useAuth } from '../../context/AuthContext.js';
-import { X, ChevronLeft, ChevronRight, Send, CheckCircle2, Heart } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight, Send, CheckCircle2 } from 'lucide-react';
 import { Avatar } from '../../components/Avatar.js';
 
 interface StoryViewerModalProps {
-  feed: any;
+  feeds: any[];
+  initialFeedIndex?: number;
   onClose: () => void;
 }
 
-export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({ feed, onClose }) => {
+export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
+  feeds = [],
+  initialFeedIndex = 0,
+  onClose,
+}) => {
   const { user } = useAuth();
-  const [currentIndex, setCurrentIndex] = useState(0);
+  const [feedIndex, setFeedIndex] = useState(initialFeedIndex);
+  const [storyIndex, setStoryIndex] = useState(0);
   const [pollData, setPollData] = useState<any>(null);
   const [qaAnswer, setQaAnswer] = useState('');
   const [qaSubmitted, setQaSubmitted] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
 
-  const stories = feed.stories || [];
-  const currentStory = stories[currentIndex];
+  const currentFeed = feeds[feedIndex];
+  const stories = currentFeed?.stories || [];
+  const currentStory = stories[storyIndex];
 
+  // When current story changes, record view & sync poll/qa data
   useEffect(() => {
     if (currentStory) {
       api.viewStory(currentStory.id);
@@ -29,23 +37,42 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({ feed, onClos
     }
   }, [currentStory]);
 
+  // Story auto-advance timer
   useEffect(() => {
-    if (isPaused) return;
+    if (isPaused || !currentStory) return;
 
     const timer = setTimeout(() => {
-      if (currentIndex < stories.length - 1) {
-        setCurrentIndex((i) => i + 1);
-      } else {
-        onClose();
-      }
+      handleNext();
     }, 6000);
 
     return () => clearTimeout(timer);
-  }, [currentIndex, stories.length, onClose, isPaused]);
+  }, [feedIndex, storyIndex, stories.length, isPaused, currentStory]);
 
-  if (!currentStory) return null;
+  if (!currentFeed || !currentStory) return null;
 
-  const handleVote = async (optionIndex: number) => {
+  const handleNext = () => {
+    if (storyIndex < stories.length - 1) {
+      setStoryIndex((i) => i + 1);
+    } else if (feedIndex < feeds.length - 1) {
+      setFeedIndex((i) => i + 1);
+      setStoryIndex(0);
+    } else {
+      onClose();
+    }
+  };
+
+  const handlePrev = () => {
+    if (storyIndex > 0) {
+      setStoryIndex((i) => i - 1);
+    } else if (feedIndex > 0) {
+      const prevFeed = feeds[feedIndex - 1];
+      setFeedIndex((i) => i - 1);
+      setStoryIndex(Math.max(0, (prevFeed.stories?.length || 1) - 1));
+    }
+  };
+
+  const handleVote = async (optionIndex: number, e: React.MouseEvent) => {
+    e.stopPropagation();
     try {
       const res = await api.votePoll(currentStory.id, optionIndex);
       if (res.poll) {
@@ -58,6 +85,7 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({ feed, onClos
 
   const handleSendQaAnswer = async (e: React.FormEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     if (!qaAnswer.trim()) return;
 
     try {
@@ -69,7 +97,7 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({ feed, onClos
     }
   };
 
-  // Poll calculation
+  // Poll calculations
   const totalVotes = pollData?.opts?.reduce((sum: number, o: any) => sum + (o.v?.length || 0), 0) || 0;
   const hasUserVoted = pollData?.opts?.some((o: any) => o.v?.includes(user?.id));
 
@@ -78,7 +106,7 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({ feed, onClos
       style={{
         position: 'fixed',
         inset: 0,
-        backgroundColor: 'rgba(0,0,0,0.85)',
+        backgroundColor: 'rgba(0,0,0,0.88)',
         zIndex: 1000,
         display: 'flex',
         alignItems: 'center',
@@ -104,8 +132,34 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({ feed, onClos
           boxShadow: '0 25px 60px rgba(0,0,0,0.6)',
         }}
       >
+        {/* Tap zones for left/right advancement */}
+        <div
+          onClick={handlePrev}
+          style={{
+            position: 'absolute',
+            top: 60,
+            bottom: 60,
+            left: 0,
+            width: '30%',
+            zIndex: 1,
+            cursor: 'pointer',
+          }}
+        />
+        <div
+          onClick={handleNext}
+          style={{
+            position: 'absolute',
+            top: 60,
+            bottom: 60,
+            right: 0,
+            width: '30%',
+            zIndex: 1,
+            cursor: 'pointer',
+          }}
+        />
+
         {/* Progress bars */}
-        <div style={{ display: 'flex', gap: 4, width: '100%', marginBottom: 12 }}>
+        <div style={{ display: 'flex', gap: 4, width: '100%', marginBottom: 12, position: 'relative', zIndex: 5 }}>
           {stories.map((_: any, idx: number) => (
             <div
               key={idx}
@@ -120,9 +174,9 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({ feed, onClos
               <div
                 style={{
                   height: '100%',
-                  width: idx === currentIndex ? '100%' : idx < currentIndex ? '100%' : '0%',
+                  width: idx === storyIndex ? '100%' : idx < storyIndex ? '100%' : '0%',
                   backgroundColor: '#FFFFFF',
-                  transition: idx === currentIndex && !isPaused ? 'width 6s linear' : 'none',
+                  transition: idx === storyIndex && !isPaused ? 'width 6s linear' : 'none',
                 }}
               />
             </div>
@@ -130,13 +184,13 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({ feed, onClos
         </div>
 
         {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'relative', zIndex: 5 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <Avatar name={feed.displayName} url={feed.avatarUrl} size={36} />
+            <Avatar name={currentFeed.displayName} url={currentFeed.avatarUrl} size={38} />
             <div>
-              <div style={{ color: '#fff', fontWeight: 600, fontSize: 14 }}>{feed.displayName}</div>
+              <div style={{ color: '#fff', fontWeight: 600, fontSize: 14 }}>{currentFeed.displayName}</div>
               <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: 11 }}>
-                {currentStory.type === 'poll' ? 'Interactive Poll' : currentStory.type === 'qa' ? 'Q&A Story' : '24h Story'}
+                {currentStory.type === 'poll' ? 'Interactive Poll' : currentStory.type === 'qa' ? 'Q&A Story' : '24h Story'} · {feedIndex + 1}/{feeds.length}
               </div>
             </div>
           </div>
@@ -147,7 +201,7 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({ feed, onClos
               width: 32,
               height: 32,
               borderRadius: '50%',
-              backgroundColor: 'rgba(0,0,0,0.3)',
+              backgroundColor: 'rgba(0,0,0,0.35)',
               color: '#fff',
               display: 'grid',
               placeItems: 'center',
@@ -169,6 +223,8 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({ feed, onClos
             justifyContent: 'center',
             textAlign: 'center',
             padding: 16,
+            position: 'relative',
+            zIndex: 4,
           }}
         >
           {/* POLL STORY */}
@@ -200,7 +256,7 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({ feed, onClos
                   return (
                     <button
                       key={idx}
-                      onClick={() => handleVote(idx)}
+                      onClick={(e) => handleVote(idx, e)}
                       disabled={hasUserVoted}
                       style={{
                         position: 'relative',
@@ -259,6 +315,7 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({ feed, onClos
                 backdropFilter: 'blur(12px)',
                 borderRadius: 18,
                 padding: '20px 18px',
+                textAlign: 'center',
                 display: 'flex',
                 flexDirection: 'column',
                 gap: 14,
@@ -272,7 +329,7 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({ feed, onClos
               {qaSubmitted ? (
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, color: '#2EE6A6', padding: '12px 0' }}>
                   <CheckCircle2 size={18} />
-                  <span style={{ fontSize: 13, fontWeight: 600 }}>Sent privately to {feed.displayName}!</span>
+                  <span style={{ fontSize: 13, fontWeight: 600 }}>Sent privately to {currentFeed.displayName}!</span>
                 </div>
               ) : (
                 <form onSubmit={handleSendQaAnswer} style={{ display: 'flex', gap: 6 }}>
@@ -328,10 +385,9 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({ feed, onClos
         </div>
 
         {/* Bottom Story Navigation Controls */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'relative', zIndex: 5 }}>
           <button
-            onClick={() => setCurrentIndex((i) => Math.max(0, i - 1))}
-            disabled={currentIndex === 0}
+            onClick={handlePrev}
             style={{
               width: 36,
               height: 36,
@@ -341,8 +397,7 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({ feed, onClos
               display: 'grid',
               placeItems: 'center',
               border: 'none',
-              cursor: currentIndex === 0 ? 'default' : 'pointer',
-              opacity: currentIndex === 0 ? 0.3 : 1,
+              cursor: 'pointer',
             }}
           >
             <ChevronLeft size={20} />
@@ -368,13 +423,7 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({ feed, onClos
           </div>
 
           <button
-            onClick={() => {
-              if (currentIndex < stories.length - 1) {
-                setCurrentIndex((i) => i + 1);
-              } else {
-                onClose();
-              }
-            }}
+            onClick={handleNext}
             style={{
               width: 36,
               height: 36,

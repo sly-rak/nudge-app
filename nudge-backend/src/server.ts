@@ -18,6 +18,18 @@ export async function buildServer() {
     },
   });
 
+  // Allow empty bodies on JSON requests (e.g. POST /archive)
+  server.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body, done) => {
+    try {
+      const trimmed = typeof body === 'string' ? body.trim() : '';
+      const json = trimmed ? JSON.parse(trimmed) : {};
+      done(null, json);
+    } catch (err: any) {
+      err.statusCode = 400;
+      done(err, undefined);
+    }
+  });
+
   // Enable CORS
   await server.register(cors, {
     origin: true,

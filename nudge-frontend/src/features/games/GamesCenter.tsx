@@ -7,9 +7,10 @@ import { Gamepad2, RotateCcw, X, Award, Sparkles } from 'lucide-react';
 interface GamesCenterProps {
   onClose?: () => void;
   conversationId?: string;
+  isEmbedded?: boolean;
 }
 
-export const GamesCenter: React.FC<GamesCenterProps> = ({ onClose, conversationId }) => {
+export const GamesCenter: React.FC<GamesCenterProps> = ({ onClose, conversationId, isEmbedded = false }) => {
   const { user } = useAuth();
   const [selectedGame, setSelectedGame] = useState<'tictactoe' | 'wordguess'>('tictactoe');
 

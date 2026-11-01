@@ -5,7 +5,7 @@ import { Plus } from 'lucide-react';
 import { Avatar } from '../../components/Avatar.js';
 
 interface StoriesTrayProps {
-  onOpenStoryViewer: (feed: any) => void;
+  onOpenStoryViewer: (feedIndex: number, feeds: any[]) => void;
   onOpenCreateStory: () => void;
 }
 
@@ -13,10 +13,14 @@ export const StoriesTray: React.FC<StoriesTrayProps> = ({ onOpenStoryViewer, onO
   const { user } = useAuth();
   const [feeds, setFeeds] = useState<any[]>([]);
 
-  useEffect(() => {
+  const loadFeeds = () => {
     api.getStoriesFeed()
-      .then((res) => setFeeds(res.feeds))
+      .then((res) => setFeeds(res.feeds || []))
       .catch((err) => console.error('Failed to load stories feed:', err));
+  };
+
+  useEffect(() => {
+    loadFeeds();
   }, []);
 
   return (
@@ -69,13 +73,13 @@ export const StoriesTray: React.FC<StoriesTrayProps> = ({ onOpenStoryViewer, onO
       </div>
 
       {/* Friends Stories */}
-      {feeds.map((feed) => {
+      {feeds.map((feed, idx) => {
         const hasUnviewed = !feed.allViewed;
 
         return (
           <div
             key={feed.authorId}
-            onClick={() => onOpenStoryViewer(feed)}
+            onClick={() => onOpenStoryViewer(idx, feeds)}
             style={{
               display: 'flex',
               flexDirection: 'column',

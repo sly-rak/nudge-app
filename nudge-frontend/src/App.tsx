@@ -8,6 +8,7 @@ import { NavTabs, TabKey } from './components/NavTabs.js';
 import { StoriesTray } from './features/stories/StoriesTray.js';
 import { ChatList } from './features/chats/ChatList.js';
 import { ChatThread } from './features/chats/ChatThread.js';
+import { StoryFeedView } from './features/stories/StoryFeedView.js';
 import { NearbyModal } from './features/nearby/NearbyModal.js';
 import { GamesCenter } from './features/games/GamesCenter.js';
 import { StoryViewerModal } from './features/stories/StoryViewerModal.js';
@@ -15,7 +16,7 @@ import { CreateStoryModal } from './features/stories/CreateStoryModal.js';
 import { CallModal } from './features/calls/CallModal.js';
 import { ProfileSettingsModal } from './features/profile/ProfileSettingsModal.js';
 import { AddFriendsModal } from './features/friends/AddFriendsModal.js';
-import { MessageSquare, Sparkles } from 'lucide-react';
+import { MessageSquare } from 'lucide-react';
 
 export const App: React.FC = () => {
   const { user, loading } = useAuth();
@@ -23,14 +24,15 @@ export const App: React.FC = () => {
   const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
   const [activeTab, setActiveTab] = useState<TabKey>('chats');
 
-  // Modals state
-  const [showNearby, setShowNearby] = useState(false);
-  const [showGames, setShowGames] = useState(false);
-  const [activeGameContext, setActiveGameContext] = useState<string | undefined>(undefined);
-  const [activeStoryFeed, setActiveStoryFeed] = useState<any | null>(null);
+  // Stories viewer state
+  const [allStoryFeeds, setAllStoryFeeds] = useState<any[]>([]);
+  const [activeFeedIndex, setActiveFeedIndex] = useState<number | null>(null);
   const [showCreateStory, setShowCreateStory] = useState(false);
-  const [showProfile, setShowProfile] = useState(false);
+
+  // New Chat / Add Friends modal state
   const [showAddFriends, setShowAddFriends] = useState(false);
+
+  // Calls state
   const [activeCall, setActiveCall] = useState<{ type: 'audio' | 'video'; contactName: string; avatarUrl?: string } | null>(null);
 
   // Load conversations
@@ -46,8 +48,17 @@ export const App: React.FC = () => {
       .catch((err) => console.error('Failed to load conversations:', err));
   };
 
+  const loadStoryFeeds = () => {
+    api.getStoriesFeed()
+      .then((res) => {
+        setAllStoryFeeds(res.feeds || []);
+      })
+      .catch((err) => console.error('Failed to load stories:', err));
+  };
+
   useEffect(() => {
     loadConversations();
+    loadStoryFeeds();
   }, [user?.id]);
 
   // Real-time conversation updates
@@ -107,9 +118,6 @@ export const App: React.FC = () => {
 
   const handleSelectTab = (tab: TabKey) => {
     setActiveTab(tab);
-    if (tab === 'games') setShowGames(true);
-    if (tab === 'nearby') setShowNearby(true);
-    if (tab === 'profile') setShowProfile(true);
   };
 
   const handleStartCall = (type: 'audio' | 'video') => {
@@ -121,183 +129,261 @@ export const App: React.FC = () => {
     });
   };
 
-  const handleLaunchGame = (gameKey: string, convId: string) => {
-    setActiveGameContext(convId);
-    setShowGames(true);
+  const handleOpenPeerChat = (peerName: string) => {
+    const match = conversations.find((c) =>
+      c.title?.toLowerCase().includes(peerName.toLowerCase()) ||
+      (c as any).otherUser?.displayName?.toLowerCase().includes(peerName.toLowerCase())
+    );
+    if (match) {
+      setSelectedConversation(match);
+    }
+    setActiveTab('chats');
+  };
+
+  const handleOpenStoryViewerWithFeeds = (feedIndex: number, feedsList?: any[]) => {
+    if (feedsList && feedsList.length > 0) {
+      setAllStoryFeeds(feedsList);
+    }
+    setActiveFeedIndex(feedIndex);
   };
 
   return (
     <div className="app-container">
       <div className="app-frame">
-        {/* Sidebar / Left Column */}
-        <aside
-          style={{
-            width: selectedConversation && window.innerWidth < 768 ? '0%' : '100%',
-            maxWidth: window.innerWidth < 768 ? '100%' : '380px',
-            display: selectedConversation && window.innerWidth < 768 ? 'none' : 'flex',
-            flexDirection: 'column',
-            borderRight: '1px solid var(--line)',
-            backgroundColor: 'var(--side)',
-            height: '100%',
-            overflow: 'hidden',
-          }}
-        >
-          <Header
-            onOpenGames={() => setShowGames(true)}
-            onOpenAddFriends={() => setShowAddFriends(true)}
-            onOpenProfile={() => setShowProfile(true)}
-          />
-
-          {/* Stories 24h tray */}
-          <StoriesTray
-            onOpenStoryViewer={(feed) => setActiveStoryFeed(feed)}
-            onOpenCreateStory={() => setShowCreateStory(true)}
-          />
-
-          {/* Conversations list */}
-          <div style={{ flex: 1, minHeight: 0 }}>
-            <ChatList
-              conversations={conversations}
-              selectedId={selectedConversation?.id}
-              onSelectConversation={(conv) => setSelectedConversation(conv)}
-              onOpenNearby={() => setShowNearby(true)}
-              onNewChat={() => setShowAddFriends(true)}
-            />
-          </div>
-
-          {/* Navigation tab bar */}
-          <NavTabs
-            activeTab={activeTab}
-            onSelectTab={handleSelectTab}
-            unreadMessagesCount={conversations.reduce((acc, c) => acc + (c.unreadCount || 0), 0)}
-          />
-        </aside>
-
-        {/* Chat Thread / Right Column */}
-        <main
-          style={{
-            flex: 1,
-            height: '100%',
-            display: !selectedConversation && window.innerWidth < 768 ? 'none' : 'flex',
-            flexDirection: 'column',
-            backgroundColor: 'var(--panel)',
-            overflow: 'hidden',
-          }}
-        >
-          {selectedConversation ? (
-            <ChatThread
-              conversation={selectedConversation}
-              onBack={() => setSelectedConversation(null)}
-              onStartCall={handleStartCall}
-              onLaunchGame={handleLaunchGame}
-              onUpdateConversation={loadConversations}
-            />
-          ) : (
-            <div
+        {/* TAB 1: CHATS VIEW (Split Messenger Layout) */}
+        {activeTab === 'chats' ? (
+          <>
+            {/* Left Column / Sidebar */}
+            <aside
               style={{
-                flex: 1,
-                display: 'flex',
+                width: selectedConversation && window.innerWidth < 768 ? '0%' : '100%',
+                maxWidth: window.innerWidth < 768 ? '100%' : '380px',
+                display: selectedConversation && window.innerWidth < 768 ? 'none' : 'flex',
                 flexDirection: 'column',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 16,
-                padding: 32,
-                color: 'var(--muted)',
-                textAlign: 'center',
+                borderRight: '1px solid var(--line)',
+                backgroundColor: 'var(--side)',
+                height: '100%',
+                overflow: 'hidden',
               }}
             >
-              <div
-                style={{
-                  width: 58,
-                  height: 58,
-                  borderRadius: 16,
-                  backgroundColor: 'var(--hover)',
-                  display: 'grid',
-                  placeItems: 'center',
-                  color: 'var(--accent)',
-                }}
-              >
-                <MessageSquare size={28} />
-              </div>
-              <div>
-                <h3 style={{ fontSize: 17, fontWeight: 700, color: 'var(--ink)', marginBottom: 4 }}>
-                  Your Conversations
-                </h3>
-                <p style={{ fontSize: 13, maxWidth: 300, lineHeight: 1.4 }}>
-                  Select a chat or friend from the list to start messaging, share stories, or duel in games.
-                </p>
-              </div>
-            </div>
-          )}
-        </main>
-      </div>
+              <Header
+                onOpenGames={() => setActiveTab('games')}
+                onOpenAddFriends={() => setShowAddFriends(true)}
+                onOpenProfile={() => setActiveTab('profile')}
+              />
 
-      {/* Modals & Overlays */}
-      {showNearby && (
-        <NearbyModal
-          onClose={() => setShowNearby(false)}
-          onSelectPeer={(name) => {
-            const match = conversations.find((c) => c.title?.toLowerCase().includes(name.toLowerCase()));
-            if (match) setSelectedConversation(match);
-          }}
-        />
-      )}
+              {/* Stories 24h tray */}
+              <StoriesTray
+                onOpenStoryViewer={(idx, feeds) => handleOpenStoryViewerWithFeeds(idx, feeds)}
+                onOpenCreateStory={() => setShowCreateStory(true)}
+              />
 
-      {showGames && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            backgroundColor: 'rgba(0,0,0,0.7)',
-            zIndex: 1000,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: 16,
-          }}
-        >
+              {/* Conversations list */}
+              <div style={{ flex: 1, minHeight: 0 }}>
+                <ChatList
+                  conversations={conversations}
+                  selectedId={selectedConversation?.id}
+                  onSelectConversation={(conv) => {
+                    setSelectedConversation(conv);
+                    setActiveTab('chats');
+                  }}
+                  onOpenNearby={() => setActiveTab('nearby')}
+                  onNewChat={() => setShowAddFriends(true)}
+                />
+              </div>
+
+              {/* Navigation tab bar */}
+              <NavTabs
+                activeTab={activeTab}
+                onSelectTab={handleSelectTab}
+                unreadMessagesCount={conversations.reduce((acc, c) => acc + (c.unreadCount || 0), 0)}
+              />
+            </aside>
+
+            {/* Right Column: Chat Thread or Empty Placeholder */}
+            <main
+              style={{
+                flex: 1,
+                height: '100%',
+                display: !selectedConversation && window.innerWidth < 768 ? 'none' : 'flex',
+                flexDirection: 'column',
+                backgroundColor: 'var(--panel)',
+                overflow: 'hidden',
+              }}
+            >
+              {selectedConversation ? (
+                <ChatThread
+                  conversation={selectedConversation}
+                  onBack={() => setSelectedConversation(null)}
+                  onStartCall={handleStartCall}
+                  onLaunchGame={() => setActiveTab('games')}
+                  onUpdateConversation={loadConversations}
+                />
+              ) : (
+                <div
+                  style={{
+                    flex: 1,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 16,
+                    padding: 32,
+                    color: 'var(--muted)',
+                    textAlign: 'center',
+                  }}
+                >
+                  <div
+                    style={{
+                      width: 58,
+                      height: 58,
+                      borderRadius: 16,
+                      backgroundColor: 'var(--hover)',
+                      display: 'grid',
+                      placeItems: 'center',
+                      color: 'var(--accent)',
+                    }}
+                  >
+                    <MessageSquare size={28} />
+                  </div>
+                  <div>
+                    <h3 style={{ fontSize: 17, fontWeight: 700, color: 'var(--ink)', marginBottom: 4 }}>
+                      Your Conversations
+                    </h3>
+                    <p style={{ fontSize: 13, maxWidth: 300, lineHeight: 1.4 }}>
+                      Select a chat or friend from the list to start messaging, share stories, or duel in games.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </main>
+          </>
+        ) : (
+          /* EMBEDDED DEDICATED TAB VIEW (Story, Play, Nearby, Profile) - NO POPUPS! */
           <div
             style={{
+              display: 'flex',
+              flexDirection: 'column',
               width: '100%',
-              maxWidth: 440,
-              height: '80vh',
-              maxHeight: 640,
-              borderRadius: 16,
+              height: '100%',
+              backgroundColor: 'var(--panel)',
               overflow: 'hidden',
-              boxShadow: 'var(--shadow)',
             }}
           >
-            <GamesCenter
-              onClose={() => {
-                setShowGames(false);
-                setActiveGameContext(undefined);
+            {/* Top Header Bar for Dedicated Tab */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '12px 18px',
+                borderBottom: '1px solid var(--line)',
+                backgroundColor: 'var(--side)',
+                flexShrink: 0,
               }}
-              conversationId={activeGameContext}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span
+                  style={{
+                    width: 28,
+                    height: 28,
+                    borderRadius: 8,
+                    backgroundColor: 'var(--accent)',
+                    color: 'var(--accent-ink)',
+                    display: 'grid',
+                    placeItems: 'center',
+                    fontSize: 14,
+                    fontWeight: 700,
+                  }}
+                >
+                  N
+                </span>
+                <h1 style={{ fontSize: 18, fontWeight: 700, color: 'var(--ink)' }}>
+                  {activeTab === 'stories' && 'Story & Social Feed'}
+                  {activeTab === 'games' && 'Games Arena'}
+                  {activeTab === 'nearby' && 'Nearby Radar'}
+                  {activeTab === 'profile' && 'Profile & Settings'}
+                </h1>
+              </div>
+
+              <button
+                onClick={() => setActiveTab('chats')}
+                style={{
+                  fontSize: 12.5,
+                  fontWeight: 600,
+                  color: 'var(--accent)',
+                  padding: '5px 12px',
+                  borderRadius: 10,
+                  backgroundColor: 'var(--hover)',
+                  transition: 'background 0.15s ease',
+                }}
+              >
+                Back to Chats
+              </button>
+            </div>
+
+            {/* Scrollable View Content */}
+            <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+              {activeTab === 'stories' && (
+                <StoryFeedView
+                  onOpenStoryViewer={(idx, feeds) => handleOpenStoryViewerWithFeeds(idx, feeds || allStoryFeeds)}
+                  onOpenCreateStory={() => setShowCreateStory(true)}
+                  onSelectUserChat={(username) => handleOpenPeerChat(username)}
+                />
+              )}
+
+              {activeTab === 'games' && (
+                <GamesCenter
+                  isEmbedded={true}
+                  conversationId={selectedConversation?.id}
+                />
+              )}
+
+              {activeTab === 'nearby' && (
+                <NearbyModal
+                  isEmbedded={true}
+                  onSelectPeer={handleOpenPeerChat}
+                />
+              )}
+
+              {activeTab === 'profile' && (
+                <ProfileSettingsModal
+                  isEmbedded={true}
+                />
+              )}
+            </div>
+
+            {/* Navigation tab bar (Always accessible at bottom!) */}
+            <NavTabs
+              activeTab={activeTab}
+              onSelectTab={handleSelectTab}
+              unreadMessagesCount={conversations.reduce((acc, c) => acc + (c.unreadCount || 0), 0)}
             />
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
-      {activeStoryFeed && (
+      {/* FULL IMMERSIVE STORY VIEWER (Tap through all friends' stories) */}
+      {activeFeedIndex !== null && allStoryFeeds.length > 0 && (
         <StoryViewerModal
-          feed={activeStoryFeed}
-          onClose={() => setActiveStoryFeed(null)}
+          feeds={allStoryFeeds}
+          initialFeedIndex={activeFeedIndex}
+          onClose={() => {
+            setActiveFeedIndex(null);
+            loadStoryFeeds();
+          }}
         />
       )}
 
+      {/* CREATE STORY MODAL */}
       {showCreateStory && (
         <CreateStoryModal
           onClose={() => setShowCreateStory(false)}
-          onStoryCreated={() => {}}
+          onStoryCreated={() => loadStoryFeeds()}
         />
       )}
 
-      {showProfile && (
-        <ProfileSettingsModal
-          onClose={() => setShowProfile(false)}
-        />
-      )}
-
+      {/* NEW CHAT / GROUP MODAL */}
       {showAddFriends && (
         <AddFriendsModal
           onClose={() => setShowAddFriends(false)}
@@ -305,16 +391,20 @@ export const App: React.FC = () => {
           onConversationCreated={(convId) => {
             loadConversations();
             setTimeout(() => {
-              api.getConversations().then(res => {
+              api.getConversations().then((res) => {
                 setConversations(res.conversations);
-                const found = res.conversations.find(c => c.id === convId);
-                if (found) setSelectedConversation(found);
+                const found = res.conversations.find((c) => c.id === convId);
+                if (found) {
+                  setSelectedConversation(found);
+                  setActiveTab('chats');
+                }
               });
             }, 300);
           }}
         />
       )}
 
+      {/* VOICE & VIDEO CALL MODAL */}
       {activeCall && (
         <CallModal
           type={activeCall.type}

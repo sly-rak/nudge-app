@@ -307,8 +307,21 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
       [decoded.id]
     );
 
+    const row = msgResult.rows[0];
     const newMsg = {
-      ...msgResult.rows[0],
+      id: row.id,
+      conversationId: row.conversation_id,
+      roomId: row.room_id,
+      seq: row.seq,
+      senderId: row.sender_id,
+      clientMsgId: row.client_msg_id,
+      type: row.type,
+      body: row.body,
+      mediaUrl: row.media_url,
+      replyToId: row.reply_to_id,
+      editedAt: row.edited_at,
+      deletedAt: row.deleted_at,
+      createdAt: row.created_at,
       sender: userResult.rows[0],
       reactions: [],
     };
