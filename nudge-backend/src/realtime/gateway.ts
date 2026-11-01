@@ -1,6 +1,7 @@
 import { WebSocket } from 'ws';
 import { query } from '../db/index.js';
 import { RealtimeServerEvent, RealtimeClientEvent } from '@nudge/shared';
+import { botService } from '../modules/bot/service.js';
 
 interface ConnectedClient {
   userId: string;
@@ -140,7 +141,7 @@ class RealtimeGateway {
       }
 
       case 'message.send': {
-        const { conversationId, body, type = 'text', mediaUrl, replyToId, clientMsgId } = event.d;
+        const { conversationId, roomId, body, type = 'text', mediaUrl, replyToId, clientMsgId } = event.d;
 
         // Verify membership
         const memberCheck = await query(
@@ -163,10 +164,10 @@ class RealtimeGateway {
         const nextSeq = convResult.rows[0].last_seq;
 
         const msgResult = await query(
-          `INSERT INTO messages (conversation_id, seq, sender_id, client_msg_id, type, body, media_url, reply_to_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          `INSERT INTO messages (conversation_id, room_id, seq, sender_id, client_msg_id, type, body, media_url, reply_to_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
            RETURNING *`,
-          [conversationId, nextSeq, userId, clientMsgId, type, body, mediaUrl || null, replyToId || null]
+          [conversationId, roomId || null, nextSeq, userId, clientMsgId, type, body, mediaUrl || null, replyToId || null]
         );
 
         // Fetch sender info
@@ -186,9 +187,13 @@ class RealtimeGateway {
           t: 'message.new',
           d: {
             conversationId,
+            roomId,
             message: newMsg,
           },
         });
+
+        // Trigger Bot learning & potential response
+        botService.handleMessage(conversationId, newMsg, userId, roomId);
         break;
       }
 
@@ -228,7 +233,7 @@ class RealtimeGateway {
 
         // If tictactoe move: { index: number, symbol: 'X' | 'O' }
         if (session.game_key === 'tictactoe' && typeof move.index === 'number') {
-          const board: (string | null)[] = session.state.board || Array(9).fill(null);
+          const board: (string | null)[] = session.state.board ? [...session.state.board] : Array(9).fill(null);
           const currentTurn = session.state.turn || 'X';
           if (!board[move.index]) {
             board[move.index] = currentTurn;
@@ -253,7 +258,7 @@ class RealtimeGateway {
             }
 
             const nextTurn = currentTurn === 'X' ? 'O' : 'X';
-            updatedState = { board, turn: nextTurn };
+            updatedState = { ...session.state, board, turn: nextTurn };
           }
         }
 
@@ -278,6 +283,11 @@ class RealtimeGateway {
           await this.broadcastToConversation(session.conversation_id, eventPayload);
         } else {
           this.sendToUser(session.created_by, eventPayload);
+        }
+
+        // Trigger bot AI move if player played against a bot and game is ongoing
+        if (status === 'in_progress') {
+          botService.handleGameMove(sessionId, userId);
         }
         break;
       }

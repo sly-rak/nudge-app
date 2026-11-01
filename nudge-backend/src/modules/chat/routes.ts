@@ -1,6 +1,7 @@
 import { FastifyPluginAsync } from 'fastify';
 import { query } from '../../db/index.js';
 import { realtimeGateway } from '../../realtime/gateway.js';
+import { botService } from '../bot/service.js';
 
 export const chatRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.addHook('onRequest', async (request, reply) => {
@@ -18,13 +19,15 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
     const convsRes = await query(
       `SELECT c.id, c.type, c.title, c.avatar_url as "avatarUrl", c.last_seq as "lastSeq",
               c.last_message_at as "lastMessageAt", c.created_at as "createdAt",
-              cm.is_pinned as "isPinned", cm.is_archived as "isArchived",
+              c.ends_at as "endsAt", c.archived_at as "archivedAt",
+              (cm.pinned_at IS NOT NULL) as "isPinned",
+              (cm.archived_at IS NOT NULL OR c.archived_at IS NOT NULL) as "isArchived",
               cm.disappearing_seconds as "disappearingSeconds",
               cm.last_read_seq as "lastReadSeq"
        FROM conversations c
        JOIN conversation_members cm ON c.id = cm.conversation_id
        WHERE cm.user_id = $1
-       ORDER BY cm.is_pinned DESC, c.last_message_at DESC`,
+       ORDER BY (cm.pinned_at IS NOT NULL) DESC, c.last_message_at DESC`,
       [decoded.id]
     );
 
@@ -35,7 +38,7 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
       const membersRes = await query(
         `SELECT cm.user_id as "userId", cm.role,
                 u.username, u.display_name as "displayName", u.avatar_url as "avatarUrl",
-                u.avatar_kind as "avatarKind", s.down_for as "downFor", s.text as "statusText"
+                u.avatar_kind as "avatarKind", u.is_bot as "isBot", s.down_for as "downFor", s.text as "statusText"
          FROM conversation_members cm
          JOIN users u ON cm.user_id = u.id
          LEFT JOIN user_status s ON u.id = s.user_id
@@ -43,10 +46,20 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
         [conv.id]
       );
 
+      // Get rooms for this conversation
+      const roomsRes = await query(
+        `SELECT id, conversation_id as "conversationId", name, emoji, admin_only as "adminOnly",
+                archived, created_at as "createdAt"
+         FROM rooms
+         WHERE conversation_id = $1
+         ORDER BY created_at ASC`,
+        [conv.id]
+      );
+
       // Get last message
       const lastMsgRes = await query(
         `SELECT m.id, m.seq, m.sender_id as "senderId", m.type, m.body, m.media_url as "mediaUrl",
-                m.created_at as "createdAt", u.display_name as "senderName"
+                m.room_id as "roomId", m.created_at as "createdAt", u.display_name as "senderName"
          FROM messages m
          JOIN users u ON m.sender_id = u.id
          WHERE m.conversation_id = $1
@@ -69,6 +82,7 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
       conversations.push({
         ...conv,
         members: membersRes.rows,
+        rooms: roomsRes.rows,
         lastMessage: lastMsgRes.rows[0] || null,
         unreadCount,
       });
@@ -80,7 +94,14 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
   // Create conversation (Direct or Group)
   fastify.post('/', async (request, reply) => {
     const decoded = request.user as { id: string };
-    const { type = 'direct', targetUserId, title, memberIds = [] } = request.body as any;
+    const {
+      type = 'direct',
+      targetUserId,
+      title,
+      memberIds = [],
+      endsAt,
+      rooms = [],
+    } = request.body as any;
 
     if (type === 'direct') {
       if (!targetUserId || targetUserId === decoded.id) {
@@ -116,10 +137,10 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
       // Group
       const groupTitle = title || 'New Group';
       const convRes = await query(
-        `INSERT INTO conversations (type, title)
-         VALUES ('group', $1)
+        `INSERT INTO conversations (type, title, ends_at)
+         VALUES ('group', $1, $2)
          RETURNING id`,
-        [groupTitle]
+        [groupTitle, endsAt ? new Date(endsAt) : null]
       );
       const convId = convRes.rows[0].id;
 
@@ -130,6 +151,23 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
         [convId, decoded.id]
       );
 
+      // Create rooms
+      const defaultRooms = rooms.length > 0
+        ? rooms
+        : [
+            { name: 'General', emoji: '💬' },
+            { name: 'School', emoji: '📚' },
+            { name: 'Events', emoji: '🎉' },
+          ];
+
+      for (const r of defaultRooms) {
+        await query(
+          `INSERT INTO rooms (conversation_id, name, emoji, admin_only)
+           VALUES ($1, $2, $3, $4)`,
+          [convId, r.name, r.emoji || '💬', !!r.adminOnly]
+        );
+      }
+
       // Add other members
       const allMembers = Array.from(new Set(memberIds.filter((id: string) => id !== decoded.id)));
       for (const mId of allMembers) {
@@ -138,16 +176,23 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
            VALUES ($1, $2, 'member') ON CONFLICT DO NOTHING`,
           [convId, mId]
         );
+
+        // Check if member is a bot -> trigger group invite acceptance greeting
+        const botCheck = await query('SELECT id FROM users WHERE id = $1 AND is_bot = true', [mId]);
+        if (botCheck.rowCount && botCheck.rowCount > 0) {
+          botService.handleGroupInvite(convId, mId as string);
+        }
       }
 
       return { conversationId: convId };
     }
   });
 
-  // Get conversation messages
+  // Get conversation messages (with optional roomId filtering)
   fastify.get('/:id/messages', async (request, reply) => {
     const decoded = request.user as { id: string };
     const { id } = request.params as { id: string };
+    const { roomId } = request.query as { roomId?: string };
 
     // Verify member
     const memCheck = await query(
@@ -158,20 +203,40 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.status(403).send({ error: { code: 'FORBIDDEN', message: 'Not a member' } });
     }
 
-    const messagesRes = await query(
-      `SELECT m.id, m.conversation_id as "conversationId", m.seq, m.sender_id as "senderId",
-              m.client_msg_id as "clientMsgId", m.type, m.body, m.media_url as "mediaUrl",
-              m.reply_to_id as "replyToId", m.edited_at as "editedAt", m.deleted_at as "deletedAt",
-              m.created_at as "createdAt",
-              u.username, u.display_name as "senderDisplayName", u.avatar_url as "senderAvatarUrl",
-              u.avatar_kind as "senderAvatarKind"
-       FROM messages m
-       JOIN users u ON m.sender_id = u.id
-       WHERE m.conversation_id = $1 AND m.deleted_at IS NULL
-       ORDER BY m.seq ASC
-       LIMIT 100`,
-      [id]
-    );
+    let messagesRes;
+    if (roomId) {
+      messagesRes = await query(
+        `SELECT m.id, m.conversation_id as "conversationId", m.room_id as "roomId",
+                m.seq, m.sender_id as "senderId", m.client_msg_id as "clientMsgId",
+                m.type, m.body, m.media_url as "mediaUrl",
+                m.reply_to_id as "replyToId", m.edited_at as "editedAt", m.deleted_at as "deletedAt",
+                m.created_at as "createdAt",
+                u.username, u.display_name as "senderDisplayName", u.avatar_url as "senderAvatarUrl",
+                u.avatar_kind as "senderAvatarKind"
+         FROM messages m
+         JOIN users u ON m.sender_id = u.id
+         WHERE m.conversation_id = $1 AND m.room_id = $2 AND m.deleted_at IS NULL
+         ORDER BY m.seq ASC
+         LIMIT 100`,
+        [id, roomId]
+      );
+    } else {
+      messagesRes = await query(
+        `SELECT m.id, m.conversation_id as "conversationId", m.room_id as "roomId",
+                m.seq, m.sender_id as "senderId", m.client_msg_id as "clientMsgId",
+                m.type, m.body, m.media_url as "mediaUrl",
+                m.reply_to_id as "replyToId", m.edited_at as "editedAt", m.deleted_at as "deletedAt",
+                m.created_at as "createdAt",
+                u.username, u.display_name as "senderDisplayName", u.avatar_url as "senderAvatarUrl",
+                u.avatar_kind as "senderAvatarKind"
+         FROM messages m
+         JOIN users u ON m.sender_id = u.id
+         WHERE m.conversation_id = $1 AND m.deleted_at IS NULL
+         ORDER BY m.seq ASC
+         LIMIT 100`,
+        [id]
+      );
+    }
 
     // Fetch reactions for these messages
     const messageIds = messagesRes.rows.map((m) => m.id);
@@ -214,7 +279,7 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.post('/:id/messages', async (request, reply) => {
     const decoded = request.user as { id: string };
     const { id } = request.params as { id: string };
-    const { body, type = 'text', mediaUrl, replyToId, clientMsgId } = request.body as any;
+    const { body, type = 'text', mediaUrl, replyToId, clientMsgId, roomId } = request.body as any;
 
     const memCheck = await query(
       'SELECT 1 FROM conversation_members WHERE conversation_id = $1 AND user_id = $2',
@@ -231,10 +296,10 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
     const nextSeq = convResult.rows[0].last_seq;
 
     const msgResult = await query(
-      `INSERT INTO messages (conversation_id, seq, sender_id, client_msg_id, type, body, media_url, reply_to_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO messages (conversation_id, room_id, seq, sender_id, client_msg_id, type, body, media_url, reply_to_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING *`,
-      [id, nextSeq, decoded.id, clientMsgId || null, type, body || '', mediaUrl || null, replyToId || null]
+      [id, roomId || null, nextSeq, decoded.id, clientMsgId || null, type, body || '', mediaUrl || null, replyToId || null]
     );
 
     const userResult = await query(
@@ -253,11 +318,136 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
       t: 'message.new',
       d: {
         conversationId: id,
+        roomId,
         message: newMsg,
       },
     });
 
+    // Trigger Bot auto-responder & learning engine
+    botService.handleMessage(id, newMsg, decoded.id, roomId);
+
     return { message: newMsg };
+  });
+
+  // Add room to group conversation
+  fastify.post('/:id/rooms', async (request, reply) => {
+    const decoded = request.user as { id: string };
+    const { id } = request.params as { id: string };
+    const { name, emoji = '💬', adminOnly = false } = request.body as any;
+
+    // Verify user is owner or admin
+    const memberRes = await query(
+      'SELECT role FROM conversation_members WHERE conversation_id = $1 AND user_id = $2',
+      [id, decoded.id]
+    );
+    if (memberRes.rowCount === 0 || !['owner', 'admin'].includes(memberRes.rows[0].role)) {
+      return reply.status(403).send({ error: { code: 'FORBIDDEN', message: 'Only admins can add rooms' } });
+    }
+
+    const res = await query(
+      `INSERT INTO rooms (conversation_id, name, emoji, admin_only)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, conversation_id as "conversationId", name, emoji, admin_only as "adminOnly", archived, created_at as "createdAt"`,
+      [id, name, emoji, adminOnly]
+    );
+
+    return { room: res.rows[0] };
+  });
+
+  // Update/Archive room
+  fastify.patch('/:id/rooms/:roomId', async (request, reply) => {
+    const decoded = request.user as { id: string };
+    const { id, roomId } = request.params as { id: string; roomId: string };
+    const { name, emoji, archived, adminOnly } = request.body as any;
+
+    const memberRes = await query(
+      'SELECT role FROM conversation_members WHERE conversation_id = $1 AND user_id = $2',
+      [id, decoded.id]
+    );
+    if (memberRes.rowCount === 0 || !['owner', 'admin'].includes(memberRes.rows[0].role)) {
+      return reply.status(403).send({ error: { code: 'FORBIDDEN', message: 'Only admins can update rooms' } });
+    }
+
+    const res = await query(
+      `UPDATE rooms
+       SET name = COALESCE($3, name),
+           emoji = COALESCE($4, emoji),
+           archived = COALESCE($5, archived),
+           admin_only = COALESCE($6, admin_only)
+       WHERE id = $1 AND conversation_id = $2
+       RETURNING id, conversation_id as "conversationId", name, emoji, admin_only as "adminOnly", archived`,
+      [roomId, id, name || null, emoji || null, archived !== undefined ? archived : null, adminOnly !== undefined ? adminOnly : null]
+    );
+
+    return { room: res.rows[0] };
+  });
+
+  // Update group expiration (endsAt)
+  fastify.patch('/:id/expiration', async (request, reply) => {
+    const decoded = request.user as { id: string };
+    const { id } = request.params as { id: string };
+    const { endsAt } = request.body as any;
+
+    const memberRes = await query(
+      'SELECT role FROM conversation_members WHERE conversation_id = $1 AND user_id = $2',
+      [id, decoded.id]
+    );
+    if (memberRes.rowCount === 0 || !['owner', 'admin'].includes(memberRes.rows[0].role)) {
+      return reply.status(403).send({ error: { code: 'FORBIDDEN', message: 'Only admins can change expiration' } });
+    }
+
+    const res = await query(
+      `UPDATE conversations
+       SET ends_at = $2, archived_at = NULL
+       WHERE id = $1
+       RETURNING id, ends_at as "endsAt", archived_at as "archivedAt"`,
+      [id, endsAt ? new Date(endsAt) : null]
+    );
+
+    return { conversation: res.rows[0] };
+  });
+
+  // Archive / Reopen conversation
+  fastify.post('/:id/archive', async (request) => {
+    const { id } = request.params as { id: string };
+    await query('UPDATE conversations SET archived_at = NOW() WHERE id = $1', [id]);
+    return { success: true };
+  });
+
+  fastify.post('/:id/reopen', async (request) => {
+    const { id } = request.params as { id: string };
+    await query('UPDATE conversations SET archived_at = NULL WHERE id = $1', [id]);
+    return { success: true };
+  });
+
+  // Invite member
+  fastify.post('/:id/members', async (request, reply) => {
+    const decoded = request.user as { id: string };
+    const { id } = request.params as { id: string };
+    const { userId, role = 'member' } = request.body as any;
+
+    const memberRes = await query(
+      'SELECT role FROM conversation_members WHERE conversation_id = $1 AND user_id = $2',
+      [id, decoded.id]
+    );
+    if (memberRes.rowCount === 0) {
+      return reply.status(403).send({ error: { code: 'FORBIDDEN', message: 'Not a member' } });
+    }
+
+    await query(
+      `INSERT INTO conversation_members (conversation_id, user_id, role)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (conversation_id, user_id) DO NOTHING`,
+      [id, userId, role]
+    );
+
+    // If bot, trigger entrance greeting
+    const botCheck = await query('SELECT id FROM users WHERE id = $1 AND is_bot = true', [userId]);
+    if (botCheck.rowCount && botCheck.rowCount > 0) {
+      botService.handleGroupInvite(id, userId);
+    }
+
+    return { success: true };
   });
 
   // Add reaction

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Conversation, Message } from '@nudge/shared';
+import { Conversation, Message, Room } from '@nudge/shared';
 import { useAuth } from '../../context/AuthContext.js';
 import { api } from '../../services/api.js';
 import { wsClient } from '../../services/websocket.js';
@@ -8,11 +8,13 @@ import {
   Phone,
   Video,
   Send,
-  Smile,
   Gamepad2,
-  Check,
   CheckCheck,
-  MoreVertical,
+  Clock,
+  Archive,
+  Plus,
+  Play,
+  RotateCcw,
 } from 'lucide-react';
 import { Avatar } from '../../components/Avatar.js';
 import { StatusChip } from '../../components/StatusChip.js';
@@ -22,6 +24,7 @@ interface ChatThreadProps {
   onBack?: () => void;
   onStartCall: (type: 'audio' | 'video') => void;
   onLaunchGame: (gameKey: string, conversationId: string) => void;
+  onUpdateConversation?: () => void;
 }
 
 const QUICK_EMOJIS = ['❤️', '😂', '🔥', '👍', '😮', '👏'];
@@ -31,24 +34,42 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
   onBack,
   onStartCall,
   onLaunchGame,
+  onUpdateConversation,
 }) => {
   const { user } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
-  const [typingUser, setTypingUser] = useState<string | null>(null);
+  const [typingName, setTypingName] = useState<string | null>(null);
   const [activeReactionMsgId, setActiveReactionMsgId] = useState<string | null>(null);
+  const [activeRoomId, setActiveRoomId] = useState<string | undefined>(
+    conversation.rooms && conversation.rooms.length > 0 ? conversation.rooms[0].id : undefined
+  );
+  const [showAddRoom, setShowAddRoom] = useState(false);
+  const [newRoomName, setNewRoomName] = useState('');
+  const [newRoomEmoji, setNewRoomEmoji] = useState('💬');
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const typingTimeoutRef = useRef<any>(null);
 
-  // Load message history
+  // Sync active room if conversation changes
+  useEffect(() => {
+    if (conversation.rooms && conversation.rooms.length > 0) {
+      if (!activeRoomId || !conversation.rooms.some((r) => r.id === activeRoomId)) {
+        setActiveRoomId(conversation.rooms[0].id);
+      }
+    } else {
+      setActiveRoomId(undefined);
+    }
+  }, [conversation.id, conversation.rooms]);
+
+  // Load message history (filtered by active room if rooms exist)
   useEffect(() => {
     let isMounted = true;
-    api.getMessages(conversation.id)
+    api.getMessages(conversation.id, activeRoomId)
       .then((res) => {
         if (isMounted) {
           setMessages(res.messages);
           scrollToBottom();
-          // Mark read
           api.markConversationRead(conversation.id);
         }
       })
@@ -57,12 +78,17 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [conversation.id]);
+  }, [conversation.id, activeRoomId]);
 
   // Subscribe to real-time events
   useEffect(() => {
-    const unsubNew = wsClient.on('message.new', (data: { conversationId: string; message: Message }) => {
+    const unsubNew = wsClient.on('message.new', (data: { conversationId: string; roomId?: string; message: Message }) => {
       if (data.conversationId === conversation.id) {
+        // If message is for another room, skip adding to current thread view
+        if (activeRoomId && data.roomId && data.roomId !== activeRoomId) {
+          return;
+        }
+
         setMessages((prev) => {
           if (prev.some((m) => m.id === data.message.id || (m.clientMsgId && m.clientMsgId === data.message.clientMsgId))) {
             return prev;
@@ -76,12 +102,19 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
 
     const unsubTyping = wsClient.on('typing', (data: { conversationId: string; userId: string; isTyping: boolean }) => {
       if (data.conversationId === conversation.id && data.userId !== user?.id) {
-        setTypingUser(data.isTyping ? 'Someone' : null);
+        if (data.isTyping) {
+          // Look up user name if member
+          const member = conversation.members?.find((m) => m.userId === data.userId);
+          const name = member?.user?.displayName || (conversation as any).otherUser?.displayName || 'Someone';
+          setTypingName(name);
+        } else {
+          setTypingName(null);
+        }
       }
     });
 
     const unsubUpdate = wsClient.on('message.updated', () => {
-      api.getMessages(conversation.id).then((res) => setMessages(res.messages));
+      api.getMessages(conversation.id, activeRoomId).then((res) => setMessages(res.messages));
     });
 
     return () => {
@@ -89,7 +122,7 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
       unsubTyping();
       unsubUpdate();
     };
-  }, [conversation.id, user?.id]);
+  }, [conversation.id, activeRoomId, user?.id, conversation.members]);
 
   const scrollToBottom = () => {
     setTimeout(() => {
@@ -127,6 +160,7 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
     const optimisticMsg: Message = {
       id: clientMsgId,
       conversationId: conversation.id,
+      roomId: activeRoomId,
       seq: (messages[messages.length - 1]?.seq || 0) + 1,
       senderId: user?.id || '',
       clientMsgId,
@@ -145,6 +179,7 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
       t: 'message.send',
       d: {
         conversationId: conversation.id,
+        roomId: activeRoomId,
         body: text,
         type: 'text',
         clientMsgId,
@@ -156,14 +191,65 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
     setActiveReactionMsgId(null);
     try {
       await api.addReaction(messageId, emoji);
-      const res = await api.getMessages(conversation.id);
+      const res = await api.getMessages(conversation.id, activeRoomId);
       setMessages(res.messages);
     } catch (err) {
       console.error('Failed to react:', err);
     }
   };
 
+  const handleAddRoom = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newRoomName.trim()) return;
+
+    try {
+      const res = await api.addRoom(conversation.id, {
+        name: newRoomName.trim(),
+        emoji: newRoomEmoji,
+      });
+      if (res.room) {
+        conversation.rooms = [...(conversation.rooms || []), res.room];
+        setActiveRoomId(res.room.id);
+        setShowAddRoom(false);
+        setNewRoomName('');
+        onUpdateConversation?.();
+      }
+    } catch (err) {
+      console.error('Failed to add room:', err);
+    }
+  };
+
+  const handleReopenGroup = async () => {
+    try {
+      await api.reopenConversation(conversation.id);
+      conversation.archivedAt = undefined;
+      conversation.isArchived = false;
+      onUpdateConversation?.();
+    } catch (err) {
+      console.error('Failed to reopen:', err);
+    }
+  };
+
   const otherUser = (conversation as any).otherUser;
+
+  // Expiration calculation
+  const getExpirationInfo = () => {
+    if (conversation.archivedAt || conversation.isArchived) {
+      return { isArchived: true, text: 'This temporary group has been archived. Messages are read-only.' };
+    }
+    if (!conversation.endsAt) return null;
+    const diff = new Date(conversation.endsAt).getTime() - Date.now();
+    if (diff <= 0) {
+      return { isArchived: true, text: 'This temporary group has reached its end date.' };
+    }
+    const hours = Math.ceil(diff / 3600000);
+    if (hours < 1) return { isArchived: false, text: 'This group ends in less than an hour.' };
+    if (hours <= 24) return { isArchived: false, text: `This group ends in ${hours} hour${hours > 1 ? 's' : ''}.` };
+    const days = Math.ceil(diff / 86400000);
+    return { isArchived: false, text: `This group ends in ${days} day${days > 1 ? 's' : ''}.` };
+  };
+
+  const expInfo = getExpirationInfo();
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', backgroundColor: 'var(--panel)' }}>
@@ -190,6 +276,9 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
                 display: 'grid',
                 placeItems: 'center',
                 color: 'var(--muted)',
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
               }}
             >
               <ArrowLeft size={18} />
@@ -208,12 +297,16 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
               {conversation.title || 'Conversation'}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              {typingUser ? (
-                <span style={{ fontSize: 11.5, color: 'var(--accent)', fontWeight: 500 }}>typing...</span>
+              {typingName ? (
+                <span style={{ fontSize: 11.5, color: 'var(--accent)', fontWeight: 500 }}>
+                  {typingName} is typing...
+                </span>
               ) : otherUser?.downFor ? (
                 <StatusChip downFor={otherUser.downFor} text={otherUser.statusText} compact />
               ) : (
-                <span style={{ fontSize: 11.5, color: 'var(--ok)' }}>Active now</span>
+                <span style={{ fontSize: 11.5, color: 'var(--ok)' }}>
+                  {conversation.type === 'group' ? `${conversation.members?.length || 0} members` : 'Active now'}
+                </span>
               )}
             </div>
           </div>
@@ -223,27 +316,183 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <button
             onClick={() => onStartCall('audio')}
-            style={{ width: 34, height: 34, borderRadius: '50%', display: 'grid', placeItems: 'center', color: 'var(--muted)' }}
+            style={{ width: 34, height: 34, borderRadius: '50%', display: 'grid', placeItems: 'center', color: 'var(--muted)', background: 'none', border: 'none', cursor: 'pointer' }}
             title="Voice call"
           >
             <Phone size={18} />
           </button>
           <button
             onClick={() => onStartCall('video')}
-            style={{ width: 34, height: 34, borderRadius: '50%', display: 'grid', placeItems: 'center', color: 'var(--muted)' }}
+            style={{ width: 34, height: 34, borderRadius: '50%', display: 'grid', placeItems: 'center', color: 'var(--muted)', background: 'none', border: 'none', cursor: 'pointer' }}
             title="Video call"
           >
             <Video size={18} />
           </button>
           <button
             onClick={() => onLaunchGame('tictactoe', conversation.id)}
-            style={{ width: 34, height: 34, borderRadius: '50%', display: 'grid', placeItems: 'center', color: 'var(--gold)' }}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 5,
+              padding: '6px 12px',
+              borderRadius: 20,
+              backgroundColor: 'rgba(234, 179, 8, 0.12)',
+              color: 'var(--gold)',
+              fontWeight: 600,
+              fontSize: 12.5,
+              border: 'none',
+              cursor: 'pointer',
+            }}
             title="Play Tic-Tac-Toe match"
           >
-            <Gamepad2 size={19} />
+            <Gamepad2 size={16} />
+            <span>Play Duel</span>
           </button>
         </div>
       </div>
+
+      {/* Group Rooms Strip (if group has rooms) */}
+      {conversation.rooms && conversation.rooms.length > 0 && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '7px 14px',
+            backgroundColor: 'var(--side)',
+            borderBottom: '1px solid var(--line)',
+            overflowX: 'auto',
+          }}
+        >
+          {conversation.rooms.map((room) => {
+            const isActive = room.id === activeRoomId;
+            return (
+              <button
+                key={room.id}
+                onClick={() => setActiveRoomId(room.id)}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 5,
+                  padding: '5px 12px',
+                  borderRadius: 20,
+                  fontSize: 12.5,
+                  fontWeight: isActive ? 700 : 500,
+                  backgroundColor: isActive ? 'var(--accent)' : 'var(--panel)',
+                  color: isActive ? 'var(--accent-ink)' : 'var(--ink)',
+                  border: isActive ? 'none' : '1px solid var(--line)',
+                  cursor: 'pointer',
+                  flexShrink: 0,
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                <span>{room.emoji || '💬'}</span>
+                <span>#{room.name}</span>
+              </button>
+            );
+          })}
+
+          <button
+            onClick={() => setShowAddRoom(true)}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 3,
+              padding: '5px 8px',
+              borderRadius: 20,
+              fontSize: 12,
+              backgroundColor: 'transparent',
+              color: 'var(--muted)',
+              border: '1px dashed var(--line)',
+              cursor: 'pointer',
+              flexShrink: 0,
+            }}
+            title="Add Room"
+          >
+            <Plus size={13} />
+            <span>Room</span>
+          </button>
+        </div>
+      )}
+
+      {/* Add Room Modal / Input */}
+      {showAddRoom && (
+        <form
+          onSubmit={handleAddRoom}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '8px 14px',
+            backgroundColor: 'var(--hover)',
+            borderBottom: '1px solid var(--line)',
+          }}
+        >
+          <input
+            type="text"
+            value={newRoomEmoji}
+            onChange={(e) => setNewRoomEmoji(e.target.value)}
+            style={{ width: 34, textAlign: 'center', fontSize: 16, background: 'none', border: '1px solid var(--line)', borderRadius: 6 }}
+          />
+          <input
+            type="text"
+            placeholder="Room name (e.g. Events, Food)"
+            value={newRoomName}
+            onChange={(e) => setNewRoomName(e.target.value)}
+            style={{ flex: 1, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--line)', fontSize: 13 }}
+            autoFocus
+          />
+          <button type="submit" style={{ padding: '4px 10px', borderRadius: 6, backgroundColor: 'var(--accent)', color: '#fff', fontSize: 12, border: 'none', cursor: 'pointer' }}>
+            Add
+          </button>
+          <button type="button" onClick={() => setShowAddRoom(false)} style={{ padding: '4px 8px', borderRadius: 6, background: 'none', border: 'none', color: 'var(--muted)', fontSize: 12, cursor: 'pointer' }}>
+            Cancel
+          </button>
+        </form>
+      )}
+
+      {/* Temporary Group Expiration Banner */}
+      {expInfo && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '8px 16px',
+            backgroundColor: expInfo.isArchived ? 'rgba(107, 114, 128, 0.1)' : 'rgba(245, 158, 11, 0.1)',
+            borderBottom: '1px dashed var(--line)',
+            fontSize: 12.5,
+            color: expInfo.isArchived ? 'var(--muted)' : '#d97706',
+            fontWeight: 500,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            {expInfo.isArchived ? <Archive size={14} /> : <Clock size={14} />}
+            <span>{expInfo.text}</span>
+          </div>
+          {expInfo.isArchived && (
+            <button
+              onClick={handleReopenGroup}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 4,
+                padding: '3px 8px',
+                borderRadius: 6,
+                backgroundColor: 'var(--panel)',
+                border: '1px solid var(--line)',
+                fontSize: 11.5,
+                fontWeight: 600,
+                cursor: 'pointer',
+                color: 'var(--ink)',
+              }}
+            >
+              <RotateCcw size={12} />
+              <span>Reopen</span>
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Message List */}
       <div
@@ -260,6 +509,53 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
         {messages.map((msg) => {
           const isMe = msg.senderId === user?.id;
           const showReactions = activeReactionMsgId === msg.id;
+
+          if (msg.type === 'game') {
+            return (
+              <div
+                key={msg.id}
+                style={{
+                  alignSelf: 'center',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  padding: '12px 18px',
+                  borderRadius: 16,
+                  backgroundColor: 'var(--panel)',
+                  border: '1px solid var(--line)',
+                  boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
+                  gap: 8,
+                  maxWidth: 320,
+                  textAlign: 'center',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--gold)', fontWeight: 700, fontSize: 14 }}>
+                  <Gamepad2 size={20} />
+                  <span>Tic-Tac-Toe Duel</span>
+                </div>
+                <div style={{ fontSize: 13, color: 'var(--ink)' }}>{msg.body}</div>
+                <button
+                  onClick={() => onLaunchGame('tictactoe', conversation.id)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '6px 16px',
+                    borderRadius: 20,
+                    backgroundColor: 'var(--accent)',
+                    color: '#fff',
+                    fontWeight: 600,
+                    fontSize: 12.5,
+                    border: 'none',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <Play size={13} fill="#fff" />
+                  <span>Play Move</span>
+                </button>
+              </div>
+            );
+          }
 
           return (
             <div
@@ -365,7 +661,7 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
                     <button
                       key={emoji}
                       onClick={() => handleReaction(msg.id, emoji)}
-                      style={{ fontSize: 16, padding: '2px 4px', transition: 'transform 0.1s' }}
+                      style={{ fontSize: 16, padding: '2px 4px', background: 'none', border: 'none', cursor: 'pointer', transition: 'transform 0.1s' }}
                     >
                       {emoji}
                     </button>
@@ -375,6 +671,29 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
             </div>
           );
         })}
+
+        {/* Animated Bot Typing Bubble */}
+        {typingName && (
+          <div
+            style={{
+              alignSelf: 'flex-start',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 5,
+              padding: '10px 14px',
+              backgroundColor: 'var(--them)',
+              border: '1px solid var(--them-bd)',
+              borderRadius: 16,
+              borderBottomLeftRadius: 4,
+            }}
+          >
+            <span style={{ fontSize: 11.5, color: 'var(--muted)', marginRight: 4 }}>{typingName}</span>
+            <div style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: 'var(--accent)', animation: 'bounce 1s infinite 0s' }} />
+            <div style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: 'var(--accent)', animation: 'bounce 1s infinite 0.2s' }} />
+            <div style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: 'var(--accent)', animation: 'bounce 1s infinite 0.4s' }} />
+          </div>
+        )}
+
         <div ref={messagesEndRef} />
       </div>
 
@@ -393,7 +712,7 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
         <button
           type="button"
           onClick={() => onLaunchGame('tictactoe', conversation.id)}
-          style={{ width: 34, height: 34, borderRadius: '50%', display: 'grid', placeItems: 'center', color: 'var(--gold)' }}
+          style={{ width: 34, height: 34, borderRadius: '50%', display: 'grid', placeItems: 'center', color: 'var(--gold)', background: 'none', border: 'none', cursor: 'pointer' }}
           title="Challenge to Tic-Tac-Toe"
         >
           <Gamepad2 size={20} />
@@ -401,7 +720,7 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
 
         <input
           type="text"
-          placeholder="Message..."
+          placeholder={activeRoomId ? `Message in #${conversation.rooms?.find(r => r.id === activeRoomId)?.name || 'room'}...` : 'Message...'}
           value={inputValue}
           onChange={handleInputChange}
           style={{
@@ -411,6 +730,8 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
             backgroundColor: 'var(--hover)',
             color: 'var(--ink)',
             fontSize: 14,
+            border: 'none',
+            outline: 'none',
           }}
         />
 
@@ -425,6 +746,8 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
             color: inputValue.trim() ? 'var(--accent-ink)' : 'var(--muted)',
             display: 'grid',
             placeItems: 'center',
+            border: 'none',
+            cursor: inputValue.trim() ? 'pointer' : 'default',
             transition: 'background-color 0.15s ease',
           }}
           title="Send"

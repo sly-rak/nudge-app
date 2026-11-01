@@ -190,6 +190,7 @@ export const App: React.FC = () => {
               onBack={() => setSelectedConversation(null)}
               onStartCall={handleStartCall}
               onLaunchGame={handleLaunchGame}
+              onUpdateConversation={loadConversations}
             />
           ) : (
             <div
@@ -301,6 +302,16 @@ export const App: React.FC = () => {
         <AddFriendsModal
           onClose={() => setShowAddFriends(false)}
           onFriendAdded={() => loadConversations()}
+          onConversationCreated={(convId) => {
+            loadConversations();
+            setTimeout(() => {
+              api.getConversations().then(res => {
+                setConversations(res.conversations);
+                const found = res.conversations.find(c => c.id === convId);
+                if (found) setSelectedConversation(found);
+              });
+            }, 300);
+          }}
         />
       )}
 

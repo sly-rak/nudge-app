@@ -1,4 +1,4 @@
-import { User, Conversation, Message, Story, GameSession, UserStatus } from '@nudge/shared';
+import { User, Conversation, Message, Story, GameSession, UserStatus, Room } from '@nudge/shared';
 
 const API_BASE = '/v1';
 
@@ -128,21 +128,65 @@ class ApiClient {
     return this.request<{ conversations: Conversation[] }>('/conversations');
   }
 
-  async createConversation(data: { type: 'direct' | 'group'; targetUserId?: string; title?: string; memberIds?: string[] }) {
+  async createConversation(data: {
+    type: 'direct' | 'group';
+    targetUserId?: string;
+    title?: string;
+    memberIds?: string[];
+    endsAt?: string | null;
+    rooms?: { name: string; emoji?: string }[];
+  }) {
     return this.request<{ conversationId: string }>('/conversations', {
       method: 'POST',
       body: JSON.stringify(data),
     });
   }
 
-  async getMessages(conversationId: string) {
-    return this.request<{ messages: Message[] }>(`/conversations/${conversationId}/messages`);
+  async getMessages(conversationId: string, roomId?: string) {
+    const q = roomId ? `?roomId=${encodeURIComponent(roomId)}` : '';
+    return this.request<{ messages: Message[] }>(`/conversations/${conversationId}/messages${q}`);
   }
 
-  async sendMessage(conversationId: string, data: { body: string; type?: string; mediaUrl?: string; replyToId?: string; clientMsgId?: string }) {
+  async sendMessage(
+    conversationId: string,
+    data: {
+      body: string;
+      type?: string;
+      mediaUrl?: string;
+      replyToId?: string;
+      clientMsgId?: string;
+      roomId?: string;
+    }
+  ) {
     return this.request<{ message: Message }>(`/conversations/${conversationId}/messages`, {
       method: 'POST',
       body: JSON.stringify(data),
+    });
+  }
+
+  async addRoom(conversationId: string, room: { name: string; emoji?: string; adminOnly?: boolean }) {
+    return this.request<{ room: Room }>(`/conversations/${conversationId}/rooms`, {
+      method: 'POST',
+      body: JSON.stringify(room),
+    });
+  }
+
+  async updateExpiration(conversationId: string, endsAt: string | null) {
+    return this.request<{ conversation: any }>(`/conversations/${conversationId}/expiration`, {
+      method: 'PATCH',
+      body: JSON.stringify({ endsAt }),
+    });
+  }
+
+  async archiveConversation(conversationId: string) {
+    return this.request<{ success: boolean }>(`/conversations/${conversationId}/archive`, {
+      method: 'POST',
+    });
+  }
+
+  async reopenConversation(conversationId: string) {
+    return this.request<{ success: boolean }>(`/conversations/${conversationId}/reopen`, {
+      method: 'POST',
     });
   }
 
@@ -164,7 +208,14 @@ class ApiClient {
     return this.request<{ feeds: any[] }>('/stories/feed');
   }
 
-  async createStory(data: { type?: string; text?: string; mediaUrl?: string; background?: string; audience?: string }) {
+  async createStory(data: {
+    type?: string;
+    text?: string;
+    mediaUrl?: string;
+    background?: string;
+    audience?: string;
+    data?: any;
+  }) {
     return this.request<{ story: Story }>('/stories', {
       method: 'POST',
       body: JSON.stringify(data),
@@ -177,20 +228,45 @@ class ApiClient {
     });
   }
 
+  async votePoll(storyId: string, optionIndex: number) {
+    return this.request<{ poll: any }>(`/stories/${storyId}/poll-vote`, {
+      method: 'POST',
+      body: JSON.stringify({ optionIndex }),
+    });
+  }
+
+  async answerQA(storyId: string, text: string) {
+    return this.request<{ qa: any }>(`/stories/${storyId}/qa-answer`, {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+    });
+  }
+
+  async getStoryInsights(storyId: string) {
+    return this.request<{ viewsCount: number; viewers: any[]; data: any }>(`/stories/${storyId}/insights`);
+  }
+
   // Games
   async getGames() {
     return this.request<{ games: any[] }>('/games');
   }
 
-  async createGameSession(gameKey: string, conversationId?: string) {
+  async createGameSession(gameKey: string, conversationId?: string, opponentId?: string) {
     return this.request<{ session: GameSession }>('/games/sessions', {
       method: 'POST',
-      body: JSON.stringify({ gameKey, conversationId }),
+      body: JSON.stringify({ gameKey, conversationId, opponentId }),
     });
   }
 
   async getGameSession(sessionId: string) {
     return this.request<{ session: GameSession }>(`/games/sessions/${sessionId}`);
+  }
+
+  async makeGameMove(sessionId: string, move: any) {
+    return this.request<{ session: GameSession }>(`/games/sessions/${sessionId}/move`, {
+      method: 'POST',
+      body: JSON.stringify({ move }),
+    });
   }
 }
 

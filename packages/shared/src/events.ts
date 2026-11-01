@@ -2,7 +2,7 @@ import { Message, Conversation, UserStatus } from './types.js';
 
 export type RealtimeServerEvent =
   | { t: 'authenticated'; d: { userId: string } }
-  | { t: 'message.new'; d: { conversationId: string; message: Message } }
+  | { t: 'message.new'; d: { conversationId: string; roomId?: string; message: Message } }
   | { t: 'message.updated'; d: { conversationId: string; message: Message } }
   | { t: 'message.status'; d: { conversationId: string; lastDeliveredSeq: number; lastReadSeq: number } }
   | { t: 'conversation.updated'; d: { conversation: Conversation } }
@@ -12,7 +12,7 @@ export type RealtimeServerEvent =
   | { t: 'error'; d: { code: string; message: string } };
 
 export type RealtimeClientEvent =
-  | { t: 'message.send'; d: { conversationId: string; body: string; type?: string; mediaUrl?: string; replyToId?: string; clientMsgId: string } }
+  | { t: 'message.send'; d: { conversationId: string; roomId?: string; body: string; type?: string; mediaUrl?: string; replyToId?: string; clientMsgId: string } }
   | { t: 'conversation.read'; d: { conversationId: string; seq: number } }
   | { t: 'typing.start'; d: { conversationId: string } }
   | { t: 'typing.stop'; d: { conversationId: string } }

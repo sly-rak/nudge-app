@@ -41,10 +41,12 @@ export const GamesCenter: React.FC<GamesCenterProps> = ({ onClose, conversationI
     const unsub = wsClient.on('game.state', (data: any) => {
       if (data.state?.board) {
         setBoard(data.state.board);
-        setTurn(data.state.turn);
+        setTurn(data.state.turn || 'X');
       }
       if (data.winnerId) {
-        setWinner(data.winnerId);
+        setWinner(data.winnerId === user?.id ? 'You' : 'Opponent');
+      } else if (data.status === 'completed') {
+        setWinner('Draw');
       }
     });
 

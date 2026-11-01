@@ -147,6 +147,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     const res = await query(
       `SELECT u.id, u.email, u.username, u.display_name as "displayName", u.bio,
               u.avatar_url as "avatarUrl", u.avatar_kind as "avatarKind",
+              u.is_bot as "isBot", u.bot_persona as "botPersona",
               s.down_for as "downFor", s.text as "statusText"
        FROM users u
        LEFT JOIN user_status s ON u.id = s.user_id

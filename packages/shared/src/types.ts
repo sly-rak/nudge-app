@@ -13,6 +13,14 @@ export interface User {
   ageTier: AgeTier;
   createdAt: string;
   status?: UserStatus;
+  isBot?: boolean;
+  botPersona?: {
+    tone?: string;
+    relationship?: string;
+    autoReply?: boolean;
+    interests?: string[];
+    replyDelayMs?: number;
+  };
 }
 
 export interface UserStatus {
@@ -32,6 +40,17 @@ export interface UserSettings {
 
 export type ConversationType = 'direct' | 'group';
 
+export interface Room {
+  id: string;
+  conversationId: string;
+  name: string;
+  emoji?: string;
+  adminOnly?: boolean;
+  archived?: boolean;
+  createdAt?: string;
+  unreadCount?: number;
+}
+
 export interface Conversation {
   id: string;
   type: ConversationType;
@@ -46,6 +65,10 @@ export interface Conversation {
   isPinned?: boolean;
   isArchived?: boolean;
   disappearingSeconds?: number;
+  endsAt?: string;
+  archivedAt?: string;
+  rooms?: Room[];
+  activeRoomId?: string;
   members?: ConversationMember[];
 }
 
@@ -76,6 +99,7 @@ export interface MessageReaction {
 export interface Message {
   id: string;
   conversationId: string;
+  roomId?: string;
   seq: number;
   senderId: string;
   clientMsgId?: string;
@@ -93,19 +117,62 @@ export interface Message {
   sender?: User;
 }
 
+export interface StoryPollOption {
+  t: string;
+  v: string[]; // array of userIds who voted
+}
+
+export interface StoryPollData {
+  q: string;
+  opts: StoryPollOption[];
+}
+
+export interface StoryQAAnswer {
+  by: string; // userId or displayName
+  text: string;
+  t: number;
+}
+
+export interface StoryQAData {
+  q: string;
+  answers: StoryQAAnswer[];
+}
+
+export interface StoryData {
+  poll?: StoryPollData;
+  qa?: StoryQAData;
+  music?: {
+    title: string;
+    artist: string;
+    url?: string;
+  };
+}
+
 export interface Story {
   id: string;
   authorId: string;
-  type: 'text' | 'photo' | 'video' | 'poll';
+  type: 'text' | 'photo' | 'video' | 'poll' | 'qa' | 'music';
   mediaUrl?: string;
   text?: string;
   background?: string;
   audience: 'public' | 'friends' | 'close';
+  data?: StoryData;
   expiresAt: string;
   createdAt: string;
   author?: User;
   hasViewed?: boolean;
   reactionsCount?: number;
+  viewsCount?: number;
+}
+
+export interface BotMemory {
+  id: string;
+  botId: string;
+  userId: string;
+  memoryKey: string;
+  memoryValue: string;
+  interactionsCount: number;
+  updatedAt: string;
 }
 
 export interface GameSession {

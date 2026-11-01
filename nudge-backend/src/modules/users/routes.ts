@@ -16,18 +16,32 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
     const decoded = request.user as { id: string };
 
     if (!q || q.trim().length === 0) {
-      return { users: [] };
+      const res = await query(
+        `SELECT u.id, u.username, u.display_name as "displayName", u.bio,
+                u.avatar_url as "avatarUrl", u.avatar_kind as "avatarKind",
+                u.is_bot as "isBot", u.bot_persona as "botPersona",
+                s.down_for as "downFor", s.text as "statusText"
+         FROM users u
+         LEFT JOIN user_status s ON u.id = s.user_id
+         WHERE u.id != $1
+         ORDER BY u.is_bot DESC, u.created_at ASC
+         LIMIT 30`,
+        [decoded.id]
+      );
+      return { users: res.rows };
     }
 
     const searchTerm = `%${q.trim()}%`;
     const res = await query(
       `SELECT u.id, u.username, u.display_name as "displayName", u.bio,
               u.avatar_url as "avatarUrl", u.avatar_kind as "avatarKind",
+              u.is_bot as "isBot", u.bot_persona as "botPersona",
               s.down_for as "downFor", s.text as "statusText"
        FROM users u
        LEFT JOIN user_status s ON u.id = s.user_id
        WHERE (u.username ILIKE $1 OR u.display_name ILIKE $1) AND u.id != $2
-       LIMIT 20`,
+       ORDER BY u.is_bot DESC
+       LIMIT 30`,
       [searchTerm, decoded.id]
     );
 

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Conversation } from '@nudge/shared';
-import { Search, Pin, Plus } from 'lucide-react';
+import { Search, Pin, Plus, Clock, Archive, ChevronDown, ChevronRight, Users } from 'lucide-react';
 import { Avatar } from '../../components/Avatar.js';
 import { StatusChip } from '../../components/StatusChip.js';
 
@@ -20,8 +20,23 @@ export const ChatList: React.FC<ChatListProps> = ({
   onNewChat,
 }) => {
   const [search, setSearch] = useState('');
+  const [showArchived, setShowArchived] = useState(false);
 
-  const filteredConversations = conversations.filter((c) => {
+  const getExpirationBadge = (endsAt?: string) => {
+    if (!endsAt) return null;
+    const diff = new Date(endsAt).getTime() - Date.now();
+    if (diff <= 0) return { text: 'Expired', isUrgent: true };
+    const hours = Math.ceil(diff / 3600000);
+    if (hours < 1) return { text: '<1h left', isUrgent: true };
+    if (hours <= 24) return { text: `${hours}h left`, isUrgent: true };
+    const days = Math.ceil(diff / 86400000);
+    return { text: `${days}d left`, isUrgent: false };
+  };
+
+  const activeConversations = conversations.filter((c) => !c.isArchived && !c.archivedAt);
+  const archivedConversations = conversations.filter((c) => c.isArchived || c.archivedAt);
+
+  const filteredConversations = activeConversations.filter((c) => {
     const title = c.title || '';
     const lastMsg = c.lastMessage?.body || '';
     return title.toLowerCase().includes(search.toLowerCase()) || lastMsg.toLowerCase().includes(search.toLowerCase());
@@ -57,7 +72,7 @@ export const ChatList: React.FC<ChatListProps> = ({
           <Search size={16} color="var(--muted)" />
           <input
             type="search"
-            placeholder="Search chats"
+            placeholder="Search chats, groups & bots"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             style={{
@@ -65,6 +80,8 @@ export const ChatList: React.FC<ChatListProps> = ({
               background: 'none',
               color: 'var(--ink)',
               fontSize: 13.5,
+              border: 'none',
+              outline: 'none',
             }}
           />
           <span
@@ -94,6 +111,7 @@ export const ChatList: React.FC<ChatListProps> = ({
             border: '1px solid var(--line)',
             textAlign: 'left',
             boxShadow: '0 2px 8px rgba(0,0,0,0.03)',
+            cursor: 'pointer',
             transition: 'border-color 0.15s ease',
           }}
         >
@@ -111,7 +129,7 @@ export const ChatList: React.FC<ChatListProps> = ({
           />
           <div>
             <b style={{ display: 'block', fontSize: 13.5, color: 'var(--ink)' }}>Nearby</b>
-            <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>Find friends & players around you</span>
+            <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>Find friends, groups & players</span>
           </div>
           <span style={{ fontSize: 11, color: 'var(--accent)', fontWeight: 600 }}>Radar</span>
         </button>
@@ -127,6 +145,7 @@ export const ChatList: React.FC<ChatListProps> = ({
           filteredConversations.map((conv) => {
             const isSelected = conv.id === selectedId;
             const otherUser = (conv as any).otherUser;
+            const expBadge = getExpirationBadge(conv.endsAt);
 
             return (
               <div
@@ -144,12 +163,29 @@ export const ChatList: React.FC<ChatListProps> = ({
                   marginBottom: 2,
                 }}
               >
-                <Avatar
-                  name={conv.title || 'Chat'}
-                  url={conv.avatarUrl}
-                  size={44}
-                  online={conv.type === 'direct'}
-                />
+                <div style={{ position: 'relative' }}>
+                  <Avatar
+                    name={conv.title || 'Chat'}
+                    url={conv.avatarUrl}
+                    size={44}
+                    online={conv.type === 'direct' && !!otherUser}
+                  />
+                  {conv.type === 'group' && (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        right: -2,
+                        bottom: -2,
+                        backgroundColor: 'var(--panel)',
+                        borderRadius: '50%',
+                        padding: 3,
+                        boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+                      }}
+                    >
+                      <Users size={11} color="var(--accent)" />
+                    </div>
+                  )}
+                </div>
 
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
@@ -167,6 +203,25 @@ export const ChatList: React.FC<ChatListProps> = ({
                         {conv.title || 'Conversation'}
                       </span>
                       {conv.isPinned && <Pin size={12} color="var(--accent)" />}
+                      {expBadge && (
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 3,
+                            fontSize: 10,
+                            padding: '1px 5px',
+                            borderRadius: 6,
+                            backgroundColor: expBadge.isUrgent ? 'rgba(239, 68, 68, 0.12)' : 'rgba(245, 158, 11, 0.12)',
+                            color: expBadge.isUrgent ? '#ef4444' : '#d97706',
+                            fontWeight: 600,
+                            flexShrink: 0,
+                          }}
+                        >
+                          <Clock size={10} />
+                          {expBadge.text}
+                        </span>
+                      )}
                     </div>
                     <span style={{ fontSize: 11, color: 'var(--muted)', flexShrink: 0 }}>
                       {formatTime(conv.lastMessageAt || conv.createdAt)}
@@ -214,6 +269,70 @@ export const ChatList: React.FC<ChatListProps> = ({
             );
           })
         )}
+
+        {/* Archived Groups Accordion */}
+        {archivedConversations.length > 0 && (
+          <div style={{ marginTop: 12, borderTop: '1px solid var(--line)', paddingTop: 8 }}>
+            <button
+              onClick={() => setShowArchived(!showArchived)}
+              style={{
+                width: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '8px 12px',
+                borderRadius: 10,
+                background: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                color: 'var(--muted)',
+                fontSize: 12.5,
+                fontWeight: 600,
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Archive size={14} />
+                <span>Archived Groups ({archivedConversations.length})</span>
+              </div>
+              {showArchived ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            </button>
+
+            {showArchived && (
+              <div style={{ marginTop: 4 }}>
+                {archivedConversations.map((conv) => (
+                  <div
+                    key={conv.id}
+                    onClick={() => onSelectConversation(conv)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 12,
+                      padding: '8px 12px',
+                      borderRadius: 10,
+                      cursor: 'pointer',
+                      opacity: 0.75,
+                      backgroundColor: conv.id === selectedId ? 'var(--hover)' : 'transparent',
+                      marginBottom: 2,
+                    }}
+                  >
+                    <Avatar name={conv.title || 'Archived'} url={conv.avatarUrl} size={36} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink)' }}>
+                          {conv.title}
+                        </span>
+                        <span style={{ fontSize: 10, color: 'var(--muted)' }}>Archived</span>
+                      </div>
+                      <div style={{ fontSize: 11.5, color: 'var(--muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {conv.lastMessage?.body || 'Archived group'}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Floating Action Button */}
@@ -233,8 +352,9 @@ export const ChatList: React.FC<ChatListProps> = ({
             placeItems: 'center',
             boxShadow: '0 8px 20px rgba(15, 107, 88, 0.35)',
             border: 'none',
+            cursor: 'pointer',
           }}
-          title="New Chat"
+          title="New Chat or Group"
         >
           <Plus size={22} />
         </button>
