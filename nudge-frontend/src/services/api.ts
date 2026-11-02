@@ -89,6 +89,10 @@ class ApiClient {
     return this.request<{ users: any[] }>(`/users/search?q=${encodeURIComponent(query)}`);
   }
 
+  async getPresence() {
+    return this.request<{ presence: Record<string, { online: boolean; lastSeenAt?: string }> }>('/users/presence');
+  }
+
   async updateProfile(data: { displayName?: string; bio?: string; avatarUrl?: string }) {
     return this.request<{ user: User }>('/users/me', {
       method: 'PATCH',

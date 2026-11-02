@@ -16,6 +16,11 @@ import { CreateStoryModal } from './features/stories/CreateStoryModal.js';
 import { CallModal } from './features/calls/CallModal.js';
 import { ProfileSettingsModal } from './features/profile/ProfileSettingsModal.js';
 import { AddFriendsModal } from './features/friends/AddFriendsModal.js';
+import { LiveSetup } from './features/live/LiveSetup.js';
+import { LiveHost } from './features/live/LiveHost.js';
+import { LiveEndSheet } from './features/live/LiveEndSheet.js';
+import { LiveWatchDemo } from './features/live/LiveWatchDemo.js';
+import { LiveReplaysModal } from './features/live/LiveReplaysModal.js';
 import { MessageSquare } from 'lucide-react';
 
 export const App: React.FC = () => {
@@ -40,7 +45,33 @@ export const App: React.FC = () => {
   const [showAddFriends, setShowAddFriends] = useState(false);
 
   // Calls state
-  const [activeCall, setActiveCall] = useState<{ type: 'audio' | 'video'; contactName: string; avatarUrl?: string } | null>(null);
+  const [activeCall, setActiveCall] = useState<{
+    type: 'audio' | 'video';
+    contactName: string;
+    avatarUrl?: string;
+    conversationId?: string;
+    isIncoming?: boolean;
+  } | null>(null);
+
+  // Live broadcast & watch state
+  const [showLiveSetup, setShowLiveSetup] = useState(false);
+  const [liveBroadcastConfig, setLiveBroadcastConfig] = useState<{
+    stream: MediaStream;
+    title: string;
+    facingMode: 'user' | 'environment';
+    isCamOn: boolean;
+    isMicOn: boolean;
+    notifyFriends: boolean;
+    simulatedViewers: boolean;
+  } | null>(null);
+  const [liveEndSummary, setLiveEndSummary] = useState<{
+    title: string;
+    durationSeconds: number;
+    peakViewers: number;
+    recordedBlob: Blob | null;
+  } | null>(null);
+  const [showWatchDemo, setShowWatchDemo] = useState(false);
+  const [showLiveReplays, setShowLiveReplays] = useState(false);
 
   // Load conversations
   const loadConversations = () => {
@@ -133,6 +164,19 @@ export const App: React.FC = () => {
       type,
       contactName: selectedConversation.title || 'Friend',
       avatarUrl: selectedConversation.avatarUrl,
+      conversationId: selectedConversation.id,
+      isIncoming: false,
+    });
+  };
+
+  const handleSimulateCall = (type: 'audio' | 'video' = 'video') => {
+    const tola = conversations.find((c) => c.title?.toLowerCase().includes('tola')) || conversations[0];
+    setActiveCall({
+      type,
+      contactName: tola ? (tola.title || 'Tola') : 'Tola',
+      avatarUrl: tola?.avatarUrl || 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150',
+      conversationId: tola?.id,
+      isIncoming: true,
     });
   };
 
@@ -213,6 +257,8 @@ export const App: React.FC = () => {
                   <StoriesTray
                     onOpenStoryViewer={(idx, feeds) => handleOpenStoryViewerWithFeeds(idx, feeds)}
                     onOpenCreateStory={() => setShowCreateStory(true)}
+                    onOpenLiveSetup={() => setShowLiveSetup(true)}
+                    onOpenWatchDemo={() => setShowWatchDemo(true)}
                   />
                   <div style={{ flex: 1, minHeight: 0 }}>
                     <ChatList
@@ -297,6 +343,8 @@ export const App: React.FC = () => {
                 onOpenStoryViewer={(idx, feeds) => handleOpenStoryViewerWithFeeds(idx, feeds || allStoryFeeds)}
                 onOpenCreateStory={() => setShowCreateStory(true)}
                 onSelectUserChat={(username) => handleOpenPeerChat(username)}
+                onOpenLiveSetup={() => setShowLiveSetup(true)}
+                onOpenWatchDemo={() => setShowWatchDemo(true)}
               />
             </div>
           )}
@@ -327,6 +375,7 @@ export const App: React.FC = () => {
             <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', backgroundColor: 'var(--wall)', overflowY: 'auto' }}>
               <ProfileSettingsModal
                 isEmbedded={true}
+                onSimulateCall={handleSimulateCall}
               />
             </div>
           )}
@@ -387,8 +436,62 @@ export const App: React.FC = () => {
           type={activeCall.type}
           contactName={activeCall.contactName}
           avatarUrl={activeCall.avatarUrl}
+          conversationId={activeCall.conversationId}
+          isIncoming={activeCall.isIncoming}
           onEndCall={() => setActiveCall(null)}
         />
+      )}
+
+      {/* LIVE BROADCAST SETUP MODAL */}
+      {showLiveSetup && (
+        <LiveSetup
+          onClose={() => setShowLiveSetup(false)}
+          onStartBroadcast={(config) => {
+            setShowLiveSetup(false);
+            setLiveBroadcastConfig(config);
+          }}
+          onOpenReplays={() => setShowLiveReplays(true)}
+        />
+      )}
+
+      {/* LIVE BROADCAST HOST SCREEN */}
+      {liveBroadcastConfig && (
+        <LiveHost
+          stream={liveBroadcastConfig.stream}
+          title={liveBroadcastConfig.title}
+          initialFacingMode={liveBroadcastConfig.facingMode}
+          initialCam={liveBroadcastConfig.isCamOn}
+          initialMic={liveBroadcastConfig.isMicOn}
+          simulatedViewers={liveBroadcastConfig.simulatedViewers}
+          onEndBroadcast={(summary) => {
+            setLiveBroadcastConfig(null);
+            setLiveEndSummary(summary);
+          }}
+        />
+      )}
+
+      {/* LIVE END SUMMARY & SAVE SHEET */}
+      {liveEndSummary && (
+        <LiveEndSheet
+          title={liveEndSummary.title}
+          durationSeconds={liveEndSummary.durationSeconds}
+          peakViewers={liveEndSummary.peakViewers}
+          recordedBlob={liveEndSummary.recordedBlob}
+          onDone={() => {
+            setLiveEndSummary(null);
+            loadStoryFeeds();
+          }}
+        />
+      )}
+
+      {/* WATCH TOLA DEMO LIVE BROADCAST */}
+      {showWatchDemo && (
+        <LiveWatchDemo onClose={() => setShowWatchDemo(false)} />
+      )}
+
+      {/* SAVED LIVE REPLAYS MODAL */}
+      {showLiveReplays && (
+        <LiveReplaysModal onClose={() => setShowLiveReplays(false)} />
       )}
     </div>
   );

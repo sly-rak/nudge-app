@@ -3,6 +3,7 @@ import { Conversation } from '@nudge/shared';
 import { Search, Pin, Plus, Clock, Archive, ChevronDown, ChevronRight, Users } from 'lucide-react';
 import { Avatar } from '../../components/Avatar.js';
 import { StatusChip } from '../../components/StatusChip.js';
+import { usePresence } from '../../context/PresenceContext.js';
 
 interface ChatListProps {
   conversations: Conversation[];
@@ -19,6 +20,7 @@ export const ChatList: React.FC<ChatListProps> = ({
   onOpenNearby,
   onNewChat,
 }) => {
+  const { isOnline } = usePresence();
   const [search, setSearch] = useState('');
   const [showArchived, setShowArchived] = useState(false);
 
@@ -169,7 +171,7 @@ export const ChatList: React.FC<ChatListProps> = ({
                     name={conv.title || 'Chat'}
                     url={conv.avatarUrl}
                     size={44}
-                    online={conv.type === 'direct' && !!otherUser}
+                    online={conv.type === 'direct' && isOnline(otherUser?.id || (otherUser as any)?.userId)}
                   />
                   {conv.type === 'group' && (
                     <div

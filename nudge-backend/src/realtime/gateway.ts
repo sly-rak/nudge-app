@@ -13,6 +13,15 @@ class RealtimeGateway {
   private clients = new Map<string, Set<WebSocket>>();
   private socketToUser = new Map<WebSocket, string>();
 
+  public getOnlineUserIds(): string[] {
+    return Array.from(this.clients.keys());
+  }
+
+  public isOnline(userId: string): boolean {
+    const userSockets = this.clients.get(userId);
+    return !!(userSockets && userSockets.size > 0);
+  }
+
   public register(userId: string, ws: WebSocket) {
     if (!this.clients.has(userId)) {
       this.clients.set(userId, new Set());

@@ -221,12 +221,17 @@ async function runTests() {
     const moveData = await moveRes.json();
     assert(moveData.session.state.board[4] === 'X', 'Human move recorded on board');
 
-    // Wait 1.2s for Bot AI to play its turn
-    await new Promise((r) => setTimeout(r, 1200));
-
-    const checkSessionRes = await fetch(`${BASE_URL}/games/sessions/${sessionId}`, { headers: authHeaders });
-    const checkSessionData = await checkSessionRes.json();
-    const botPlayed = checkSessionData.session.state.board.includes('O');
+    // Wait for Bot AI to play its turn (poll up to 3.5s for remote DB latency)
+    let botPlayed = false;
+    for (let i = 0; i < 7; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      const checkSessionRes = await fetch(`${BASE_URL}/games/sessions/${sessionId}`, { headers: authHeaders });
+      const checkSessionData = await checkSessionRes.json();
+      if (checkSessionData.session?.state?.board?.includes('O')) {
+        botPlayed = true;
+        break;
+      }
+    }
     assert(botPlayed, 'Tola AI Bot automatically computed and played its counter-move (O)!');
 
     console.log(`\n=== TEST RESULTS: ${passed} PASSED, ${failed} FAILED ===`);

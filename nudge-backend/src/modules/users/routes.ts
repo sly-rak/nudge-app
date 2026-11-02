@@ -1,5 +1,7 @@
 import { FastifyPluginAsync } from 'fastify';
 import { query } from '../../db/index.js';
+import { realtimeGateway } from '../../realtime/gateway.js';
+import { botService } from '../bot/service.js';
 
 export const userRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.addHook('onRequest', async (request, reply) => {
@@ -46,6 +48,33 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
     );
 
     return { users: res.rows };
+  });
+
+  // Get user presence map
+  fastify.get('/presence', async (request) => {
+    const decoded = request.user as { id: string };
+    const usersRes = await query(
+      `SELECT id, username, is_bot as "isBot", last_seen_at as "lastSeenAt" FROM users WHERE id != $1`,
+      [decoded.id]
+    );
+    const onlineSocketUserIds = new Set(realtimeGateway.getOnlineUserIds());
+    const now = new Date();
+    const presence: Record<string, { online: boolean; lastSeenAt?: string }> = {};
+
+    for (const u of usersRes.rows) {
+      if (u.isBot) {
+        const botP = botService.getBotPresence(u.username, now);
+        presence[u.id] = botP;
+      } else {
+        const isOnline = onlineSocketUserIds.has(u.id);
+        presence[u.id] = {
+          online: isOnline,
+          lastSeenAt: isOnline ? undefined : (u.lastSeenAt || undefined),
+        };
+      }
+    }
+
+    return { presence };
   });
 
   // Get user by username

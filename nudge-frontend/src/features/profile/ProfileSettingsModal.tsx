@@ -2,12 +2,13 @@ import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext.js';
 import { useTheme } from '../../context/ThemeContext.js';
 import { DownForStatus } from '@nudge/shared';
-import { X, Check, Shield, Bell, Moon, Sun, LogOut, Flame, MessageSquare, Gamepad2, Users, Sparkles } from 'lucide-react';
+import { X, Check, Shield, Bell, Moon, Sun, LogOut, Flame, MessageSquare, Gamepad2, Users, Sparkles, Phone, Video as VideoIcon } from 'lucide-react';
 import { Avatar } from '../../components/Avatar.js';
 
 interface ProfileSettingsModalProps {
   onClose?: () => void;
   isEmbedded?: boolean;
+  onSimulateCall?: (type: 'audio' | 'video') => void;
 }
 
 const DOWN_FOR_OPTIONS: { key: DownForStatus; label: string; desc: string; emoji: string }[] = [
@@ -17,7 +18,7 @@ const DOWN_FOR_OPTIONS: { key: DownForStatus; label: string; desc: string; emoji
   { key: 'heads_down', label: 'Heads down', desc: 'Focusing, notifications muted', emoji: '🎧' },
 ];
 
-export const ProfileSettingsModal: React.FC<ProfileSettingsModalProps> = ({ onClose, isEmbedded = false }) => {
+export const ProfileSettingsModal: React.FC<ProfileSettingsModalProps> = ({ onClose, isEmbedded = false, onSimulateCall }) => {
   const { user, updateStatus, logout, demoAccounts, switchUser } = useAuth();
   const { theme, toggleTheme } = useTheme();
   const [selectedDownFor, setSelectedDownFor] = useState<DownForStatus>(user?.status?.downFor || 'talk');
@@ -221,6 +222,60 @@ export const ProfileSettingsModal: React.FC<ProfileSettingsModalProps> = ({ onCl
             </button>
           </div>
         </div>
+
+        {/* Test Incoming Calls & Camera */}
+        {onSimulateCall && (
+          <div style={{ borderTop: '1px solid var(--line)', paddingTop: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+              <Phone size={14} color="var(--accent)" />
+              <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--muted)', letterSpacing: 0.5 }}>
+                TEST INCOMING CALLS & CAMERA
+              </label>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              <button
+                onClick={() => onSimulateCall('audio')}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 6,
+                  padding: '9px 12px',
+                  borderRadius: 10,
+                  backgroundColor: 'var(--side)',
+                  border: '1px solid var(--line)',
+                  color: 'var(--ink)',
+                  fontSize: 12.5,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                <Phone size={14} color="var(--ok)" />
+                <span>Simulate Voice Call</span>
+              </button>
+              <button
+                onClick={() => onSimulateCall('video')}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 6,
+                  padding: '9px 12px',
+                  borderRadius: 10,
+                  backgroundColor: 'var(--side)',
+                  border: '1px solid var(--line)',
+                  color: 'var(--ink)',
+                  fontSize: 12.5,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                <VideoIcon size={14} color="var(--accent)" />
+                <span>Simulate Video Call</span>
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Switch Demo Accounts */}
         <div style={{ borderTop: '1px solid var(--line)', paddingTop: 16 }}>

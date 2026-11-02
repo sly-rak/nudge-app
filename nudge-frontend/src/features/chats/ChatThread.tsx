@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Conversation, Message, Room } from '@nudge/shared';
 import { useAuth } from '../../context/AuthContext.js';
+import { usePresence } from '../../context/PresenceContext.js';
 import { api } from '../../services/api.js';
 import { wsClient } from '../../services/websocket.js';
 import {
@@ -37,6 +38,7 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
   onUpdateConversation,
 }) => {
   const { user } = useAuth();
+  const { isOnline, getStatusLabel } = usePresence();
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [typingName, setTypingName] = useState<string | null>(null);
@@ -289,7 +291,7 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
             name={conversation.title || 'Chat'}
             url={conversation.avatarUrl}
             size={40}
-            online={conversation.type === 'direct'}
+            online={conversation.type === 'direct' && isOnline(otherUser?.id || otherUser?.userId)}
           />
 
           <div>
@@ -301,11 +303,20 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
                 <span style={{ fontSize: 11.5, color: 'var(--accent)', fontWeight: 500 }}>
                   {typingName} is typing...
                 </span>
+              ) : conversation.type === 'group' ? (
+                <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>
+                  {conversation.members?.length || 0} members
+                </span>
               ) : otherUser?.downFor ? (
-                <StatusChip downFor={otherUser.downFor} text={otherUser.statusText} compact />
+                <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                  <StatusChip downFor={otherUser.downFor} text={otherUser.statusText} compact />
+                  <span style={{ fontSize: 11, color: isOnline(otherUser?.id || otherUser?.userId) ? 'var(--ok)' : 'var(--muted)' }}>
+                    • {isOnline(otherUser?.id || otherUser?.userId) ? 'Online' : getStatusLabel(otherUser?.id || otherUser?.userId)}
+                  </span>
+                </div>
               ) : (
-                <span style={{ fontSize: 11.5, color: 'var(--ok)' }}>
-                  {conversation.type === 'group' ? `${conversation.members?.length || 0} members` : 'Active now'}
+                <span style={{ fontSize: 11.5, color: isOnline(otherUser?.id || otherUser?.userId) ? 'var(--ok)' : 'var(--muted)' }}>
+                  {isOnline(otherUser?.id || otherUser?.userId) ? 'Online' : getStatusLabel(otherUser?.id || otherUser?.userId)}
                 </span>
               )}
             </div>

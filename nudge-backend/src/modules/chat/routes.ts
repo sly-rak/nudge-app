@@ -39,7 +39,7 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
 
     const [membersRes, roomsRes, lastMsgRes] = await Promise.all([
       query(
-        `SELECT cm.conversation_id as "conversationId", cm.user_id as "userId", cm.role,
+        `SELECT cm.conversation_id as "conversationId", cm.user_id as "userId", u.id as "id", cm.role,
                 u.username, u.display_name as "displayName", u.avatar_url as "avatarUrl",
                 u.avatar_kind as "avatarKind", u.is_bot as "isBot", s.down_for as "downFor", s.text as "statusText"
          FROM conversation_members cm

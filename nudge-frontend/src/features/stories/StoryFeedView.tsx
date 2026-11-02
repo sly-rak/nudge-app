@@ -1,13 +1,15 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext.js';
 import { Avatar } from '../../components/Avatar.js';
 import { StoriesTray } from './StoriesTray.js';
-import { Heart, MessageCircle, Share2, Bookmark, Image, Send, Trash2, UserPlus, Sparkles } from 'lucide-react';
+import { Heart, MessageCircle, Share2, Bookmark, Image, Send, Trash2, UserPlus, Sparkles, X } from 'lucide-react';
 
 interface StoryFeedViewProps {
   onOpenStoryViewer: (feedIndex: number, feeds: any[]) => void;
   onOpenCreateStory: () => void;
   onSelectUserChat?: (username: string) => void;
+  onOpenLiveSetup?: () => void;
+  onOpenWatchDemo?: () => void;
 }
 
 interface Post {
@@ -135,6 +137,8 @@ export const StoryFeedView: React.FC<StoryFeedViewProps> = ({
   onOpenStoryViewer,
   onOpenCreateStory,
   onSelectUserChat,
+  onOpenLiveSetup,
+  onOpenWatchDemo,
 }) => {
   const { user } = useAuth();
   const [posts, setPosts] = useState<Post[]>(INITIAL_POSTS);
@@ -142,7 +146,32 @@ export const StoryFeedView: React.FC<StoryFeedViewProps> = ({
   const [filterMode, setFilterMode] = useState<'all' | 'following'>('all');
   const [expandedComments, setExpandedComments] = useState<Record<string, boolean>>({});
   const [commentInputs, setCommentInputs] = useState<Record<string, string>>({});
-  const [followedUsers, setFollowedUsers] = useState<Set<string>>(new Set());
+  const [followedUsers, setFollowedUsers] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem('nudge_followed_users');
+      return saved ? new Set(JSON.parse(saved)) : new Set(['tola', 'chidi', 'amaka']);
+    } catch {
+      return new Set(['tola', 'chidi', 'amaka']);
+    }
+  });
+
+  const [isSuggestionsDismissed, setIsSuggestionsDismissed] = useState<boolean>(() => {
+    try {
+      const ts = localStorage.getItem('nudge_sugg_dismissed');
+      if (!ts) return false;
+      // Hidden for 7 days
+      return Date.now() - parseInt(ts, 10) < 7 * 24 * 3600 * 1000;
+    } catch {
+      return false;
+    }
+  });
+
+  const handleDismissSuggestions = () => {
+    setIsSuggestionsDismissed(true);
+    try {
+      localStorage.setItem('nudge_sugg_dismissed', Date.now().toString());
+    } catch {}
+  };
 
   const handleLike = (postId: string) => {
     setPosts((prev) =>
@@ -222,9 +251,21 @@ export const StoryFeedView: React.FC<StoryFeedViewProps> = ({
       const next = new Set(prev);
       if (next.has(username)) next.delete(username);
       else next.add(username);
+      try {
+        localStorage.setItem('nudge_followed_users', JSON.stringify(Array.from(next)));
+      } catch {}
       return next;
     });
   };
+
+  const currentUsername = user?.username?.toLowerCase() || 'dayo';
+  const visiblePosts = posts.filter((p) => {
+    if (filterMode === 'all') return true;
+    const authorU = p.author.username.toLowerCase();
+    return followedUsers.has(authorU) || authorU === currentUsername || authorU === 'me';
+  });
+
+  const unfollowedSuggestions = SUGGESTIONS.filter((s) => !followedUsers.has(s.username));
 
   return (
     <div
@@ -240,6 +281,8 @@ export const StoryFeedView: React.FC<StoryFeedViewProps> = ({
       <StoriesTray
         onOpenStoryViewer={(idx, feeds) => onOpenStoryViewer(idx, feeds)}
         onOpenCreateStory={onOpenCreateStory}
+        onOpenLiveSetup={onOpenLiveSetup}
+        onOpenWatchDemo={onOpenWatchDemo}
       />
 
       {/* Main Feed Container */}
@@ -342,8 +385,41 @@ export const StoryFeedView: React.FC<StoryFeedViewProps> = ({
         </div>
 
         {/* Post Items */}
-        {posts.map((post, idx) => {
-          const isCommentsOpen = !!expandedComments[post.id];
+        {visiblePosts.length === 0 ? (
+          <div
+            style={{
+              padding: '36px 20px',
+              textAlign: 'center',
+              backgroundColor: 'var(--side)',
+              borderRadius: 16,
+              border: '1px solid var(--line)',
+              color: 'var(--muted)',
+            }}
+          >
+            <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--ink)', marginBottom: 6 }}>No posts in Following yet</p>
+            <p style={{ fontSize: 12.5, lineHeight: 1.4 }}>
+              Follow friends from the "For you" feed or check out suggestions to see their posts here!
+            </p>
+            <button
+              onClick={() => setFilterMode('all')}
+              style={{
+                marginTop: 12,
+                padding: '6px 16px',
+                borderRadius: 20,
+                backgroundColor: 'var(--accent)',
+                color: '#fff',
+                border: 'none',
+                cursor: 'pointer',
+                fontSize: 12,
+                fontWeight: 600,
+              }}
+            >
+              Back to For You
+            </button>
+          </div>
+        ) : (
+          visiblePosts.map((post, idx) => {
+            const isCommentsOpen = !!expandedComments[post.id];
 
           return (
             <React.Fragment key={post.id}>
@@ -514,8 +590,8 @@ export const StoryFeedView: React.FC<StoryFeedViewProps> = ({
                 )}
               </div>
 
-              {/* People to follow card after second post */}
-              {idx === 1 && (
+              {/* People to follow card after second post (dismissible and hidden when empty) */}
+              {idx === 1 && !isSuggestionsDismissed && unfollowedSuggestions.length > 0 && (
                 <div
                   style={{
                     backgroundColor: 'var(--side)',
@@ -525,14 +601,35 @@ export const StoryFeedView: React.FC<StoryFeedViewProps> = ({
                     display: 'flex',
                     flexDirection: 'column',
                     gap: 10,
+                    position: 'relative',
                   }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 700, color: 'var(--ink)' }}>
-                    <Sparkles size={14} color="var(--gold)" />
-                    <span>People to follow</span>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 700, color: 'var(--ink)' }}>
+                      <Sparkles size={14} color="var(--gold)" />
+                      <span>People to follow</span>
+                    </div>
+                    <button
+                      onClick={handleDismissSuggestions}
+                      style={{
+                        width: 24,
+                        height: 24,
+                        borderRadius: '50%',
+                        display: 'grid',
+                        placeItems: 'center',
+                        color: 'var(--muted)',
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                      }}
+                      title="Dismiss suggestions"
+                      aria-label="Dismiss suggestions"
+                    >
+                      <X size={15} />
+                    </button>
                   </div>
 
-                  {SUGGESTIONS.map((sug) => {
+                  {unfollowedSuggestions.map((sug) => {
                     const isFollowed = followedUsers.has(sug.username);
                     return (
                       <div
@@ -577,7 +674,7 @@ export const StoryFeedView: React.FC<StoryFeedViewProps> = ({
               )}
             </React.Fragment>
           );
-        })}
+        }))}
       </div>
     </div>
   );

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext.js';
+import { usePresence } from '../../context/PresenceContext.js';
 import { wsClient } from '../../services/websocket.js';
 import { api } from '../../services/api.js';
 import { Gamepad2, RotateCcw, X, Award, Sparkles, ChevronDown, Users, Flame, Shield, Trophy } from 'lucide-react';
@@ -92,6 +93,7 @@ const DEFAULT_BOTS: OpponentProfile[] = [
 
 export const GamesCenter: React.FC<GamesCenterProps> = ({ onClose, conversationId, isEmbedded = false, initialOpponent }) => {
   const { user } = useAuth();
+  const { isOnline, getStatusLabel } = usePresence();
   const [selectedGame, setSelectedGame] = useState<'tictactoe' | 'c4' | 'rps' | 'wordguess'>('tictactoe');
 
   // Opponent management
@@ -102,6 +104,13 @@ export const GamesCenter: React.FC<GamesCenterProps> = ({ onClose, conversationI
 
   // Match statistics (W / L / D against current opponent)
   const [scores, setScores] = useState<Record<string, { w: number; l: number; d: number }>>({});
+
+  // Sync initialOpponent when passed or changed from Chat
+  useEffect(() => {
+    if (initialOpponent) {
+      setCurrentOpponent(initialOpponent);
+    }
+  }, [initialOpponent?.id, initialOpponent?.username]);
 
   // Tic-Tac-Toe state
   const [board, setBoard] = useState<(string | null)[]>(Array(9).fill(null));
@@ -133,14 +142,16 @@ export const GamesCenter: React.FC<GamesCenterProps> = ({ onClose, conversationI
           const bots = res.users.filter((u: any) => u.isBot || u.id !== user?.id);
           if (bots.length > 0) {
             setAvailableOpponents(bots);
-            // Default to first bot or tola
-            const tola = bots.find((b: any) => b.username === 'tola') || bots[0];
-            setCurrentOpponent(tola);
+            // Only overwrite if NO initialOpponent was passed
+            if (!initialOpponent) {
+              const tola = bots.find((b: any) => b.username === 'tola') || bots[0];
+              setCurrentOpponent(tola);
+            }
           }
         }
       })
       .catch(() => {});
-  }, [user]);
+  }, [user, initialOpponent]);
 
   // Load or create game session when selectedGame or currentOpponent changes
   useEffect(() => {
@@ -579,153 +590,356 @@ export const GamesCenter: React.FC<GamesCenterProps> = ({ onClose, conversationI
       </div>
 
       {/* Opponent Card & Selector */}
-      <div
-        style={{
-          position: 'relative',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '10px 14px',
-          borderRadius: 14,
-          backgroundColor: 'var(--side)',
-          border: '1px solid var(--line)',
-          marginBottom: 14,
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          {/* Avatar with live dot */}
-          <div style={{ position: 'relative' }}>
-            {currentOpponent.avatarUrl ? (
-              <img
-                src={currentOpponent.avatarUrl}
-                alt={currentOpponent.displayName}
-                style={{ width: 42, height: 42, borderRadius: '50%', objectFit: 'cover' }}
-              />
-            ) : (
-              <div
-                style={{
-                  width: 42,
-                  height: 42,
-                  borderRadius: '50%',
-                  backgroundColor: 'var(--accent)',
-                  color: '#fff',
-                  fontWeight: 700,
-                  fontSize: 16,
-                  display: 'grid',
-                  placeItems: 'center',
-                }}
-              >
-                {currentOpponent.displayName[0]}
-              </div>
-            )}
-            <span
+      {(() => {
+        const isCurOnline = isOnline(currentOpponent.id);
+        const curStatus = getStatusLabel(currentOpponent.id);
+        const isFromChat = !!initialOpponent && (currentOpponent.id === initialOpponent.id || currentOpponent.username === initialOpponent.username);
+
+        const chatOpponent = availableOpponents.find(
+          (b) => initialOpponent && (b.id === initialOpponent.id || b.username === initialOpponent.username)
+        );
+        const onlineOpponents = availableOpponents.filter(
+          (b) => isOnline(b.id) && (!initialOpponent || (b.id !== initialOpponent.id && b.username !== initialOpponent.username))
+        );
+        const offlineOpponents = availableOpponents.filter(
+          (b) => !isOnline(b.id) && (!initialOpponent || (b.id !== initialOpponent.id && b.username !== initialOpponent.username))
+        );
+
+        return (
+          <>
+            <div
               style={{
-                position: 'absolute',
-                bottom: 0,
-                right: 0,
-                width: 11,
-                height: 11,
-                borderRadius: '50%',
-                backgroundColor: 'var(--ok)',
-                border: '2px solid var(--side)',
+                position: 'relative',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '10px 14px',
+                borderRadius: 14,
+                backgroundColor: 'var(--side)',
+                border: '1px solid var(--line)',
+                marginBottom: 10,
               }}
-            />
-          </div>
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                {/* Avatar with live dot */}
+                <div style={{ position: 'relative' }}>
+                  {currentOpponent.avatarUrl ? (
+                    <img
+                      src={currentOpponent.avatarUrl}
+                      alt={currentOpponent.displayName}
+                      style={{ width: 42, height: 42, borderRadius: '50%', objectFit: 'cover' }}
+                    />
+                  ) : (
+                    <div
+                      style={{
+                        width: 42,
+                        height: 42,
+                        borderRadius: '50%',
+                        backgroundColor: 'var(--accent)',
+                        color: '#fff',
+                        fontWeight: 700,
+                        fontSize: 16,
+                        display: 'grid',
+                        placeItems: 'center',
+                      }}
+                    >
+                      {currentOpponent.displayName[0]}
+                    </div>
+                  )}
+                  <span
+                    style={{
+                      position: 'absolute',
+                      bottom: 0,
+                      right: 0,
+                      width: 11,
+                      height: 11,
+                      borderRadius: '50%',
+                      backgroundColor: isCurOnline ? 'var(--ok)' : 'var(--muted)',
+                      border: '2px solid var(--side)',
+                    }}
+                  />
+                </div>
 
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.5, fontWeight: 600 }}>
-                Opponent
-              </span>
-              <span style={{ fontSize: 11, backgroundColor: 'rgba(37, 160, 108, 0.15)', color: 'var(--ok)', padding: '1px 6px', borderRadius: 6, fontWeight: 600 }}>
-                Online
-              </span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <b style={{ fontSize: 15, color: 'var(--ink)' }}>{currentOpponent.displayName}</b>
-              <span style={{ fontSize: 12, color: 'var(--muted)' }}>
-                ({currentOpponent.botPersona?.relationship || currentOpponent.bio?.slice(0, 24) || 'Bot'})
-              </span>
-            </div>
-          </div>
-        </div>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.5, fontWeight: 600 }}>
+                      Opponent
+                    </span>
+                    {isFromChat && (
+                      <span
+                        style={{
+                          fontSize: 10.5,
+                          backgroundColor: 'rgba(15, 107, 88, 0.15)',
+                          color: 'var(--accent)',
+                          padding: '1px 6px',
+                          borderRadius: 6,
+                          fontWeight: 700,
+                        }}
+                      >
+                        From your chat
+                      </span>
+                    )}
+                    <span
+                      style={{
+                        fontSize: 10.5,
+                        backgroundColor: isCurOnline ? 'rgba(37, 160, 108, 0.15)' : 'var(--hover)',
+                        color: isCurOnline ? 'var(--ok)' : 'var(--muted)',
+                        padding: '1px 6px',
+                        borderRadius: 6,
+                        fontWeight: 600,
+                      }}
+                    >
+                      {isCurOnline ? 'Online' : curStatus}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <b style={{ fontSize: 15, color: 'var(--ink)' }}>{currentOpponent.displayName}</b>
+                    <span style={{ fontSize: 12, color: 'var(--muted)' }}>
+                      ({currentOpponent.botPersona?.relationship || currentOpponent.bio?.slice(0, 24) || 'Bot'})
+                    </span>
+                  </div>
+                </div>
+              </div>
 
-        {/* Change Opponent Button */}
-        <button
-          onClick={() => setShowOpponentPicker(!showOpponentPicker)}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 4,
-            padding: '6px 12px',
-            borderRadius: 20,
-            backgroundColor: 'var(--panel)',
-            border: '1px solid var(--line)',
-            fontSize: 12,
-            fontWeight: 600,
-            color: 'var(--ink)',
-            cursor: 'pointer',
-          }}
-        >
-          <span>Change</span>
-          <ChevronDown size={14} />
-        </button>
-
-        {/* Dropdown Opponent Picker */}
-        {showOpponentPicker && (
-          <div
-            style={{
-              position: 'absolute',
-              top: '100%',
-              right: 14,
-              marginTop: 6,
-              zIndex: 30,
-              backgroundColor: 'var(--panel)',
-              border: '1px solid var(--line)',
-              borderRadius: 14,
-              boxShadow: '0 12px 32px rgba(0,0,0,0.18)',
-              padding: 8,
-              minWidth: 260,
-              maxHeight: 280,
-              overflowY: 'auto',
-            }}
-          >
-            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', padding: '4px 8px 8px', textTransform: 'uppercase' }}>
-              Choose Opponent
-            </div>
-            {availableOpponents.map((bot) => (
+              {/* Change Opponent Button */}
               <button
-                key={bot.id || bot.username}
-                onClick={() => {
-                  setCurrentOpponent(bot);
-                  setShowOpponentPicker(false);
-                }}
+                onClick={() => setShowOpponentPicker(!showOpponentPicker)}
                 style={{
-                  width: '100%',
                   display: 'flex',
                   alignItems: 'center',
-                  gap: 10,
-                  padding: '8px 10px',
-                  borderRadius: 8,
-                  backgroundColor: currentOpponent.username === bot.username ? 'var(--hover)' : 'transparent',
-                  textAlign: 'left',
+                  gap: 4,
+                  padding: '6px 12px',
+                  borderRadius: 20,
+                  backgroundColor: 'var(--panel)',
+                  border: '1px solid var(--line)',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  color: 'var(--ink)',
                   cursor: 'pointer',
                 }}
               >
-                <div style={{ width: 32, height: 32, borderRadius: '50%', backgroundColor: 'var(--accent)', color: '#fff', display: 'grid', placeItems: 'center', fontWeight: 700, fontSize: 13, flexShrink: 0 }}>
-                  {bot.displayName[0]}
-                </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--ink)' }}>{bot.displayName}</div>
-                  <div style={{ fontSize: 11, color: 'var(--muted)', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
-                    {bot.botPersona?.relationship || bot.bio || 'Player'}
-                  </div>
-                </div>
+                <span>Change</span>
+                <ChevronDown size={14} />
               </button>
-            ))}
-          </div>
-        )}
-      </div>
+
+              {/* Dropdown Opponent Picker */}
+              {showOpponentPicker && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: '100%',
+                    right: 14,
+                    marginTop: 6,
+                    zIndex: 40,
+                    backgroundColor: 'var(--panel)',
+                    border: '1px solid var(--line)',
+                    borderRadius: 14,
+                    boxShadow: '0 12px 32px rgba(0,0,0,0.18)',
+                    padding: 8,
+                    minWidth: 280,
+                    maxHeight: 340,
+                    overflowY: 'auto',
+                  }}
+                >
+                  {/* From Chat Group */}
+                  {chatOpponent && (
+                    <div style={{ marginBottom: 8 }}>
+                      <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--accent)', padding: '4px 8px', textTransform: 'uppercase' }}>
+                        From This Chat
+                      </div>
+                      <button
+                        key={chatOpponent.id}
+                        onClick={() => {
+                          setCurrentOpponent(chatOpponent);
+                          setShowOpponentPicker(false);
+                        }}
+                        style={{
+                          width: '100%',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 10,
+                          padding: '7px 10px',
+                          borderRadius: 8,
+                          backgroundColor: currentOpponent.username === chatOpponent.username ? 'var(--hover)' : 'transparent',
+                          border: '1px solid rgba(15, 107, 88, 0.25)',
+                          textAlign: 'left',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <div style={{ position: 'relative' }}>
+                          <div style={{ width: 32, height: 32, borderRadius: '50%', backgroundColor: 'var(--accent)', color: '#fff', display: 'grid', placeItems: 'center', fontWeight: 700, fontSize: 13 }}>
+                            {chatOpponent.displayName[0]}
+                          </div>
+                          <span
+                            style={{
+                              position: 'absolute',
+                              bottom: -1,
+                              right: -1,
+                              width: 9,
+                              height: 9,
+                              borderRadius: '50%',
+                              backgroundColor: isOnline(chatOpponent.id) ? 'var(--ok)' : 'var(--muted)',
+                              border: '1.5px solid var(--panel)',
+                            }}
+                          />
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                            <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink)' }}>{chatOpponent.displayName}</span>
+                            <span style={{ fontSize: 10.5, color: isOnline(chatOpponent.id) ? 'var(--ok)' : 'var(--muted)', fontWeight: 600 }}>
+                              {isOnline(chatOpponent.id) ? 'Online' : getStatusLabel(chatOpponent.id)}
+                            </span>
+                          </div>
+                          <div style={{ fontSize: 11, color: 'var(--muted)', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                            {chatOpponent.botPersona?.relationship || chatOpponent.bio || 'Chat Partner'}
+                          </div>
+                        </div>
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Online Now Group */}
+                  {onlineOpponents.length > 0 && (
+                    <div style={{ marginBottom: 8 }}>
+                      <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--ok)', padding: '4px 8px', textTransform: 'uppercase' }}>
+                        Online Now ({onlineOpponents.length})
+                      </div>
+                      {onlineOpponents.map((bot) => (
+                        <button
+                          key={bot.id || bot.username}
+                          onClick={() => {
+                            setCurrentOpponent(bot);
+                            setShowOpponentPicker(false);
+                          }}
+                          style={{
+                            width: '100%',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 10,
+                            padding: '7px 10px',
+                            borderRadius: 8,
+                            backgroundColor: currentOpponent.username === bot.username ? 'var(--hover)' : 'transparent',
+                            textAlign: 'left',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          <div style={{ position: 'relative' }}>
+                            <div style={{ width: 30, height: 30, borderRadius: '50%', backgroundColor: 'var(--accent)', color: '#fff', display: 'grid', placeItems: 'center', fontWeight: 700, fontSize: 12 }}>
+                              {bot.displayName[0]}
+                            </div>
+                            <span
+                              style={{
+                                position: 'absolute',
+                                bottom: -1,
+                                right: -1,
+                                width: 8,
+                                height: 8,
+                                borderRadius: '50%',
+                                backgroundColor: 'var(--ok)',
+                                border: '1.5px solid var(--panel)',
+                              }}
+                            />
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                              <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink)' }}>{bot.displayName}</span>
+                              <span style={{ fontSize: 10, color: 'var(--ok)', fontWeight: 600 }}>Online</span>
+                            </div>
+                            <div style={{ fontSize: 11, color: 'var(--muted)', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                              {bot.botPersona?.relationship || bot.bio || 'Player'}
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Offline Group */}
+                  {offlineOpponents.length > 0 && (
+                    <div>
+                      <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--muted)', padding: '4px 8px', textTransform: 'uppercase' }}>
+                        Offline ({offlineOpponents.length})
+                      </div>
+                      {offlineOpponents.map((bot) => (
+                        <button
+                          key={bot.id || bot.username}
+                          onClick={() => {
+                            setCurrentOpponent(bot);
+                            setShowOpponentPicker(false);
+                          }}
+                          style={{
+                            width: '100%',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 10,
+                            padding: '7px 10px',
+                            borderRadius: 8,
+                            backgroundColor: currentOpponent.username === bot.username ? 'var(--hover)' : 'transparent',
+                            opacity: 0.8,
+                            textAlign: 'left',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          <div style={{ position: 'relative' }}>
+                            <div style={{ width: 30, height: 30, borderRadius: '50%', backgroundColor: 'var(--muted)', color: '#fff', display: 'grid', placeItems: 'center', fontWeight: 700, fontSize: 12 }}>
+                              {bot.displayName[0]}
+                            </div>
+                            <span
+                              style={{
+                                position: 'absolute',
+                                bottom: -1,
+                                right: -1,
+                                width: 8,
+                                height: 8,
+                                borderRadius: '50%',
+                                backgroundColor: 'var(--muted)',
+                                border: '1.5px solid var(--panel)',
+                              }}
+                            />
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                              <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--ink)' }}>{bot.displayName}</span>
+                              <span style={{ fontSize: 10, color: 'var(--muted)' }}>{getStatusLabel(bot.id)}</span>
+                            </div>
+                            <div style={{ fontSize: 11, color: 'var(--muted)', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                              {bot.botPersona?.relationship || bot.bio || 'Player'}
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Offline notice if opponent is offline */}
+            {!isCurOnline && (
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '8px 12px',
+                  borderRadius: 10,
+                  backgroundColor: 'rgba(235, 193, 94, 0.1)',
+                  border: '1px solid rgba(235, 193, 94, 0.25)',
+                  color: 'var(--gold)',
+                  fontSize: 12,
+                  marginBottom: 12,
+                  lineHeight: 1.4,
+                }}
+              >
+                <span>ℹ️</span>
+                <span>
+                  <b>{currentOpponent.displayName}</b> is currently offline ({curStatus}). Your move will be sent and they'll play their turn when back!
+                </span>
+              </div>
+            )}
+          </>
+        );
+      })()}
 
       {/* Head-to-Head Record Banner */}
       <div

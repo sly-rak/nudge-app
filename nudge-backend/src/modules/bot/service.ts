@@ -796,7 +796,7 @@ export class BotService {
             } catch (err) {
               console.error('[BotService] Error in bot game move:', err);
             }
-          }, 700);
+          }, 400);
         }
       }
     } catch (err) {
@@ -888,6 +888,246 @@ export class BotService {
     ];
     return lines.some(([a, b, c]) => board[a] === symbol && board[b] === symbol && board[c] === symbol);
   }
+
+  /**
+   * Determine simulated bot presence based on time of day
+   */
+  public getBotPresence(username: string, now = new Date()): { online: boolean; lastSeenAt: string } {
+    const u = username.toLowerCase();
+    const hour = now.getHours(); // 0-23
+    let online = false;
+    let minutesAgo = 15;
+
+    switch (u) {
+      case 'tola':
+        // Tola is very active gaming & chatting: 9am - 1am
+        online = (hour >= 9 || hour <= 1);
+        minutesAgo = 12;
+        break;
+      case 'chidi':
+        // Chidi: late night dev, 11am - 3am
+        online = (hour >= 11 || hour <= 3);
+        minutesAgo = 8;
+        break;
+      case 'mum':
+        // Mum: 6am - 10pm
+        online = (hour >= 6 && hour <= 22);
+        minutesAgo = 30;
+        break;
+      case 'amaka':
+        // Amaka: 8am - 11pm
+        online = (hour >= 8 && hour <= 23);
+        minutesAgo = 18;
+        break;
+      case 'dami':
+        // Dami: 10am - 7pm
+        online = (hour >= 10 && hour <= 19);
+        minutesAgo = 45;
+        break;
+      case 'seyi':
+        // Seyi: 7am - 11pm
+        online = (hour >= 7 && hour <= 23);
+        minutesAgo = 25;
+        break;
+      case 'jide':
+        // Jide: 6am-9am, 5pm-9pm
+        online = (hour >= 6 && hour <= 9) || (hour >= 17 && hour <= 21);
+        minutesAgo = 60;
+        break;
+      case 'kemi':
+        // Kemi: 12pm - 12am
+        online = (hour >= 12 || hour === 0);
+        minutesAgo = 40;
+        break;
+      case 'sade':
+        // Sade: 9am - 10pm
+        online = (hour >= 9 && hour <= 22);
+        minutesAgo = 35;
+        break;
+      default:
+        online = (hour >= 9 && hour <= 22);
+        minutesAgo = 20;
+    }
+
+    const lastSeenDate = new Date(now.getTime() - minutesAgo * 60 * 1000);
+    return {
+      online,
+      lastSeenAt: lastSeenDate.toISOString(),
+    };
+  }
+
+  /**
+   * Ensure all bots have active stories so the story tray never shows half empty or missing bots
+   */
+  public async ensureActiveStories() {
+    try {
+      const botsRes = await query('SELECT id, username, display_name FROM users WHERE is_bot = true');
+      if (botsRes.rows.length === 0) return;
+
+      const templates: Record<string, Array<{ type: string; text?: string; background: string; audience?: string; data?: any }>> = {
+        tola: [
+          {
+            type: 'poll',
+            background: 'linear-gradient(135deg, #1A1F35, #0F6B58)',
+            audience: 'public',
+            data: {
+              poll: {
+                q: 'Matchday prediction: Arsenal vs City! Who takes it? ⚽',
+                opts: [
+                  { t: 'Arsenal win 🔴', v: [] },
+                  { t: 'City win 🔵', v: [] },
+                  { t: 'Draw & drama', v: [] },
+                ]
+              }
+            }
+          },
+          {
+            type: 'text',
+            text: 'Just finished 5 straight rounds of Tic-Tac-Toe. Who dares challenge me in Connect 4 next? 🎮💥',
+            background: 'linear-gradient(135deg, #10B981, #064E3B)',
+            audience: 'public',
+          },
+        ],
+        chidi: [
+          {
+            type: 'qa',
+            background: 'linear-gradient(135deg, #2D1B69, #1D2A44)',
+            audience: 'public',
+            data: {
+              qa: {
+                q: 'Ask me anything about backend architecture & shipping fast 🚀',
+                answers: [
+                  { by: 'Dami', text: 'How do you handle zero-downtime DB migrations?', t: Date.now() - 3600000 }
+                ]
+              }
+            }
+          },
+          {
+            type: 'text',
+            text: 'Coffee is 90% of my git commits. Deployed the new presence service with 0 downtime ☕💻',
+            background: 'linear-gradient(135deg, #1E293B, #0F172A)',
+            audience: 'public',
+          }
+        ],
+        sade: [
+          {
+            type: 'text',
+            text: 'Golden hour from the Lekki-Ikoyi link bridge never gets old 🌇✨',
+            background: 'linear-gradient(135deg, #FF5E62, #FF9966)',
+            audience: 'friends',
+          },
+          {
+            type: 'text',
+            text: 'Developing 35mm film from Tarkwa Bay 📷🌊 The colors turned out magical!',
+            background: 'linear-gradient(135deg, #EC4899, #8B5CF6)',
+            audience: 'public',
+          }
+        ],
+        amaka: [
+          {
+            type: 'text',
+            text: 'Library until midnight. Past questions survivor! 📚✨ Final year will not defeat me.',
+            background: 'linear-gradient(135deg, #0BA360, #3CBA92)',
+            audience: 'friends',
+          },
+          {
+            type: 'poll',
+            background: 'linear-gradient(135deg, #3B82F6, #1D4ED8)',
+            audience: 'friends',
+            data: {
+              poll: {
+                q: 'Study fuel: Coffee or Green Tea? 🍵☕',
+                opts: [
+                  { t: 'Iced Coffee ☕', v: [] },
+                  { t: 'Matcha / Green Tea 🍵', v: [] },
+                  { t: 'Cold water & pure panic 😭', v: [] },
+                ]
+              }
+            }
+          }
+        ],
+        kemi: [
+          {
+            type: 'text',
+            text: 'Birthday week recap: Thank you everyone for the endless love and prayers! 🎂🥰',
+            background: 'linear-gradient(135deg, #D4145A, #FBB03B)',
+            audience: 'friends',
+          },
+          {
+            type: 'text',
+            text: 'Friday brunch mood unlocked 🥂 Good food, good friends, no stress.',
+            background: 'linear-gradient(135deg, #F43F5E, #FB7185)',
+            audience: 'public',
+          }
+        ],
+        seyi: [
+          {
+            type: 'text',
+            text: 'Lagos traffic tested me today, but patience + good Afrobeats playlist saved the day 🚗🎶',
+            background: 'linear-gradient(135deg, #4F46E5, #06B6D4)',
+            audience: 'public',
+          }
+        ],
+        dami: [
+          {
+            type: 'text',
+            text: 'Polishing design tokens and micro-interactions ✨ The devil is truly in the details.',
+            background: 'linear-gradient(135deg, #8B5CF6, #3B82F6)',
+            audience: 'public',
+          }
+        ],
+        mum: [
+          {
+            type: 'text',
+            text: 'Good morning my children! Hope you are drinking enough water and resting well today ❤️🙏',
+            background: 'linear-gradient(135deg, #F59E0B, #D97706)',
+            audience: 'friends',
+          }
+        ]
+      };
+
+      for (const bot of botsRes.rows) {
+        const u = bot.username.toLowerCase();
+        // Check active story
+        const activeRes = await query(
+          'SELECT id FROM stories WHERE author_id = $1 AND expires_at > NOW() LIMIT 1',
+          [bot.id]
+        );
+        if (activeRes.rowCount === 0) {
+          const tList = templates[u] || [
+            {
+              type: 'text',
+              text: `Checking in! Wishing everyone a productive day ahead ✨`,
+              background: 'linear-gradient(135deg, #6366F1, #8B5CF6)',
+              audience: 'public',
+            }
+          ];
+          const chosen = tList[Math.floor(Math.random() * tList.length)];
+          await query(
+            `INSERT INTO stories (author_id, type, text, background, audience, data, expires_at)
+             VALUES ($1, $2, $3, $4, $5, $6, NOW() + INTERVAL '24 hours')`,
+            [
+              bot.id,
+              chosen.type,
+              chosen.text || null,
+              chosen.background,
+              chosen.audience || 'public',
+              chosen.data ? JSON.stringify(chosen.data) : null,
+            ]
+          );
+          console.log(`[BotService] Refreshed active story for bot @${u}`);
+        }
+      }
+    } catch (err) {
+      console.error('[BotService] Error in ensureActiveStories:', err);
+    }
+  }
 }
 
 export const botService = new BotService();
+
+// Periodically keep stories active
+botService.ensureActiveStories();
+setInterval(() => {
+  botService.ensureActiveStories();
+}, 30 * 60 * 1000);
