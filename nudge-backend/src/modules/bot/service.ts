@@ -417,13 +417,17 @@ export class BotService {
       return femiPool[Math.floor(Math.random() * femiPool.length)];
     }
 
-    // General fallback
-    const generalPool = [
-      `Hey ${effectiveName}! Got your message. Let's make today productive and fun! 🚀`,
-      `Always great hearing from you, ${effectiveName}! What's next on your agenda?`,
-      `I hear you loud and clear, ${effectiveName}! Let's keep moving forward.`,
+    // Authentic fallback pool matching nudge-standalone
+    const fallbackPool = [
+      'Haha no way! 😂 Tell me everything.',
+      'Say less. What time?',
+      "I'm in! Bring good vibes.",
+      'Lol you are impossible! But true.',
+      'Okay okay, let me finish this and ping you back.',
+      'Facts! 100%.',
+      'Small world! What are you up to right now? 😄',
     ];
-    return generalPool[Math.floor(Math.random() * generalPool.length)];
+    return fallbackPool[Math.floor(Math.random() * fallbackPool.length)];
   }
 
   /**
@@ -495,8 +499,16 @@ export class BotService {
               [conversationId, nextSeq, bot.id, replyText, roomId || null]
             );
 
+            const row = newMsgRes.rows[0];
             const botMsg = {
-              ...newMsgRes.rows[0],
+              id: row.id,
+              conversationId: row.conversation_id,
+              roomId: row.room_id,
+              seq: row.seq,
+              senderId: row.sender_id,
+              type: row.type,
+              body: row.body,
+              createdAt: row.created_at,
               sender: {
                 id: bot.id,
                 username: bot.username,
@@ -544,8 +556,16 @@ export class BotService {
                   [conversationId, nextSeq, bot.id, replyText, roomId || null]
                 );
 
+                const row = newMsgRes.rows[0];
                 const botMsg = {
-                  ...newMsgRes.rows[0],
+                  id: row.id,
+                  conversationId: row.conversation_id,
+                  roomId: row.room_id,
+                  seq: row.seq,
+                  senderId: row.sender_id,
+                  type: row.type,
+                  body: row.body,
+                  createdAt: row.created_at,
                   sender: {
                     id: bot.id,
                     username: bot.username,
@@ -751,15 +771,24 @@ export class BotService {
                     [session.conversation_id, nextSeq, botUserId, endText]
                   );
 
+                  const endRow = endMsg.rows[0];
+                  const botEndMsg = {
+                    id: endRow.id,
+                    conversationId: endRow.conversation_id,
+                    seq: endRow.seq,
+                    senderId: endRow.sender_id,
+                    type: endRow.type,
+                    body: endRow.body,
+                    createdAt: endRow.created_at,
+                    sender: { id: botUserId, displayName: botName },
+                    reactions: [],
+                  };
+
                   await realtimeGateway.broadcastToConversation(session.conversation_id, {
                     t: 'message.new',
                     d: {
                       conversationId: session.conversation_id,
-                      message: {
-                        ...endMsg.rows[0],
-                        sender: { id: botUserId, displayName: botName },
-                        reactions: [],
-                      },
+                      message: botEndMsg,
                     },
                   });
                 }
@@ -820,16 +849,26 @@ export class BotService {
             [conversationId, nextSeq, bot.id, text, roomId]
           );
 
+          const invRow = msgRes.rows[0];
+          const inviteMsg = {
+            id: invRow.id,
+            conversationId: invRow.conversation_id,
+            roomId: invRow.room_id,
+            seq: invRow.seq,
+            senderId: invRow.sender_id,
+            type: invRow.type,
+            body: invRow.body,
+            createdAt: invRow.created_at,
+            sender: { id: bot.id, displayName: bot.display_name },
+            reactions: [],
+          };
+
           await realtimeGateway.broadcastToConversation(conversationId, {
             t: 'message.new',
             d: {
               conversationId,
               roomId,
-              message: {
-                ...msgRes.rows[0],
-                sender: { id: bot.id, displayName: bot.display_name },
-                reactions: [],
-              },
+              message: inviteMsg,
             },
           });
         } catch (err) {

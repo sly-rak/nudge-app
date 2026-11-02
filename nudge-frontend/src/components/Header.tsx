@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext.js';
+import { useTheme } from '../context/ThemeContext.js';
 import { Gamepad2, Moon, Sun, UserPlus, Users, Sparkles } from 'lucide-react';
 import { Avatar } from './Avatar.js';
 
@@ -11,17 +12,8 @@ interface HeaderProps {
 
 export const Header: React.FC<HeaderProps> = ({ onOpenGames, onOpenAddFriends, onOpenProfile }) => {
   const { user, demoAccounts, switchUser } = useAuth();
-  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
-    return (localStorage.getItem('nudge_theme') as 'light' | 'dark') || 'light';
-  });
+  const { theme, toggleTheme } = useTheme();
   const [showSwitchDropdown, setShowSwitchDropdown] = useState(false);
-
-  const toggleTheme = () => {
-    const nextTheme = theme === 'light' ? 'dark' : 'light';
-    setTheme(nextTheme);
-    localStorage.setItem('nudge_theme', nextTheme);
-    document.documentElement.setAttribute('data-theme', nextTheme);
-  };
 
   return (
     <header

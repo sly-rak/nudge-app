@@ -23,6 +23,13 @@ export const App: React.FC = () => {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
   const [activeTab, setActiveTab] = useState<TabKey>('chats');
+  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768);
+
+  useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   // Stories viewer state
   const [allStoryFeeds, setAllStoryFeeds] = useState<any[]>([]);
@@ -70,7 +77,7 @@ export const App: React.FC = () => {
             return {
               ...c,
               lastMessage: data.message,
-              lastMessageAt: data.message.createdAt,
+              lastMessageAt: data.message.createdAt || data.message.created_at,
               lastSeq: data.message.seq,
               unreadCount: c.id === selectedConversation?.id ? 0 : (c.unreadCount || 0) + 1,
             };
@@ -147,71 +154,34 @@ export const App: React.FC = () => {
     setActiveFeedIndex(feedIndex);
   };
 
+  const selectedOpponent = (selectedConversation as any)?.otherUser
+    ? {
+        id: (selectedConversation as any).otherUser.id,
+        username: (selectedConversation as any).otherUser.username,
+        displayName: (selectedConversation as any).otherUser.displayName,
+        avatarUrl: (selectedConversation as any).otherUser.avatarUrl,
+        bio: (selectedConversation as any).otherUser.bio,
+        isBot: (selectedConversation as any).otherUser.isBot,
+        botPersona: (selectedConversation as any).otherUser.botPersona,
+      }
+    : selectedConversation?.title
+    ? {
+        id: selectedConversation.id,
+        username: selectedConversation.title.toLowerCase(),
+        displayName: selectedConversation.title,
+        avatarUrl: selectedConversation.avatarUrl,
+      }
+    : undefined;
+
   return (
     <div className="app-container">
-      <div className="app-frame">
-        {/* TAB 1: CHATS VIEW (Split Messenger Layout) */}
-        {activeTab === 'chats' ? (
-          <>
-            {/* Left Column / Sidebar */}
-            <aside
-              style={{
-                width: selectedConversation && window.innerWidth < 768 ? '0%' : '100%',
-                maxWidth: window.innerWidth < 768 ? '100%' : '380px',
-                display: selectedConversation && window.innerWidth < 768 ? 'none' : 'flex',
-                flexDirection: 'column',
-                borderRight: '1px solid var(--line)',
-                backgroundColor: 'var(--side)',
-                height: '100%',
-                overflow: 'hidden',
-              }}
-            >
-              <Header
-                onOpenGames={() => setActiveTab('games')}
-                onOpenAddFriends={() => setShowAddFriends(true)}
-                onOpenProfile={() => setActiveTab('profile')}
-              />
-
-              {/* Stories 24h tray */}
-              <StoriesTray
-                onOpenStoryViewer={(idx, feeds) => handleOpenStoryViewerWithFeeds(idx, feeds)}
-                onOpenCreateStory={() => setShowCreateStory(true)}
-              />
-
-              {/* Conversations list */}
-              <div style={{ flex: 1, minHeight: 0 }}>
-                <ChatList
-                  conversations={conversations}
-                  selectedId={selectedConversation?.id}
-                  onSelectConversation={(conv) => {
-                    setSelectedConversation(conv);
-                    setActiveTab('chats');
-                  }}
-                  onOpenNearby={() => setActiveTab('nearby')}
-                  onNewChat={() => setShowAddFriends(true)}
-                />
-              </div>
-
-              {/* Navigation tab bar */}
-              <NavTabs
-                activeTab={activeTab}
-                onSelectTab={handleSelectTab}
-                unreadMessagesCount={conversations.reduce((acc, c) => acc + (c.unreadCount || 0), 0)}
-              />
-            </aside>
-
-            {/* Right Column: Chat Thread or Empty Placeholder */}
-            <main
-              style={{
-                flex: 1,
-                height: '100%',
-                display: !selectedConversation && window.innerWidth < 768 ? 'none' : 'flex',
-                flexDirection: 'column',
-                backgroundColor: 'var(--panel)',
-                overflow: 'hidden',
-              }}
-            >
-              {selectedConversation ? (
+      <div className="app-frame" style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
+        {/* Content Area */}
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', position: 'relative', overflow: 'hidden' }}>
+          {/* TAB 1: CHATS */}
+          {activeTab === 'chats' && (
+            isMobile && selectedConversation ? (
+              <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
                 <ChatThread
                   conversation={selectedConversation}
                   onBack={() => setSelectedConversation(null)}
@@ -219,171 +189,158 @@ export const App: React.FC = () => {
                   onLaunchGame={() => setActiveTab('games')}
                   onUpdateConversation={loadConversations}
                 />
-              ) : (
+              </div>
+            ) : (
+              <div style={{ width: '100%', height: '100%', display: 'flex' }}>
+                {/* Left Column: Chat List */}
                 <div
                   style={{
-                    flex: 1,
+                    width: isMobile ? '100%' : '380px',
                     display: 'flex',
                     flexDirection: 'column',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: 16,
-                    padding: 32,
-                    color: 'var(--muted)',
-                    textAlign: 'center',
+                    borderRight: isMobile ? 'none' : '1px solid var(--line)',
+                    backgroundColor: 'var(--side)',
+                    height: '100%',
+                    overflow: 'hidden',
+                    flexShrink: 0,
                   }}
                 >
-                  <div
-                    style={{
-                      width: 58,
-                      height: 58,
-                      borderRadius: 16,
-                      backgroundColor: 'var(--hover)',
-                      display: 'grid',
-                      placeItems: 'center',
-                      color: 'var(--accent)',
-                    }}
-                  >
-                    <MessageSquare size={28} />
-                  </div>
-                  <div>
-                    <h3 style={{ fontSize: 17, fontWeight: 700, color: 'var(--ink)', marginBottom: 4 }}>
-                      Your Conversations
-                    </h3>
-                    <p style={{ fontSize: 13, maxWidth: 300, lineHeight: 1.4 }}>
-                      Select a chat or friend from the list to start messaging, share stories, or duel in games.
-                    </p>
+                  <Header
+                    onOpenGames={() => setActiveTab('games')}
+                    onOpenAddFriends={() => setShowAddFriends(true)}
+                    onOpenProfile={() => setActiveTab('profile')}
+                  />
+                  <StoriesTray
+                    onOpenStoryViewer={(idx, feeds) => handleOpenStoryViewerWithFeeds(idx, feeds)}
+                    onOpenCreateStory={() => setShowCreateStory(true)}
+                  />
+                  <div style={{ flex: 1, minHeight: 0 }}>
+                    <ChatList
+                      conversations={conversations}
+                      selectedId={selectedConversation?.id}
+                      onSelectConversation={(conv) => {
+                        setSelectedConversation(conv);
+                      }}
+                      onOpenNearby={() => setActiveTab('nearby')}
+                      onNewChat={() => setShowAddFriends(true)}
+                    />
                   </div>
                 </div>
-              )}
-            </main>
-          </>
-        ) : (
-          /* EMBEDDED DEDICATED TAB VIEW (Story, Play, Nearby, Profile) - NO POPUPS! */
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              width: '100%',
-              height: '100%',
-              backgroundColor: 'var(--panel)',
-              overflow: 'hidden',
-            }}
-          >
-            {/* Top Header Bar for Dedicated Tab */}
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                padding: '12px 18px',
-                borderBottom: '1px solid var(--line)',
-                backgroundColor: 'var(--side)',
-                flexShrink: 0,
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <span
-                  style={{
-                    width: 28,
-                    height: 28,
-                    borderRadius: 8,
-                    backgroundColor: 'var(--accent)',
-                    color: 'var(--accent-ink)',
-                    display: 'grid',
-                    placeItems: 'center',
-                    fontSize: 14,
-                    fontWeight: 700,
-                  }}
-                >
-                  N
-                </span>
-                <h1 style={{ fontSize: 18, fontWeight: 700, color: 'var(--ink)' }}>
-                  {activeTab === 'stories' && 'Story & Social Feed'}
-                  {activeTab === 'games' && 'Games Arena'}
-                  {activeTab === 'nearby' && 'Nearby Radar'}
-                  {activeTab === 'profile' && 'Profile & Settings'}
-                </h1>
+
+                {/* Right Column (Desktop): Active Chat Thread */}
+                {!isMobile && (
+                  <main
+                    style={{
+                      flex: 1,
+                      height: '100%',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      backgroundColor: 'var(--panel)',
+                      overflow: 'hidden',
+                    }}
+                  >
+                    {selectedConversation ? (
+                      <ChatThread
+                        conversation={selectedConversation}
+                        onBack={() => setSelectedConversation(null)}
+                        onStartCall={handleStartCall}
+                        onLaunchGame={() => setActiveTab('games')}
+                        onUpdateConversation={loadConversations}
+                      />
+                    ) : (
+                      <div
+                        style={{
+                          flex: 1,
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: 16,
+                          padding: 32,
+                          color: 'var(--muted)',
+                          textAlign: 'center',
+                        }}
+                      >
+                        <div
+                          style={{
+                            width: 58,
+                            height: 58,
+                            borderRadius: 16,
+                            backgroundColor: 'var(--hover)',
+                            display: 'grid',
+                            placeItems: 'center',
+                            color: 'var(--accent)',
+                          }}
+                        >
+                          <MessageSquare size={28} />
+                        </div>
+                        <div>
+                          <h3 style={{ fontSize: 17, fontWeight: 700, color: 'var(--ink)', marginBottom: 4 }}>
+                            Your Conversations
+                          </h3>
+                          <p style={{ fontSize: 13, maxWidth: 300, lineHeight: 1.4 }}>
+                            Select a chat or friend from the list to start messaging, share stories, or challenge to games.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </main>
+                )}
               </div>
+            )
+          )}
 
-              <button
-                onClick={() => setActiveTab('chats')}
-                style={{
-                  fontSize: 12.5,
-                  fontWeight: 600,
-                  color: 'var(--accent)',
-                  padding: '5px 12px',
-                  borderRadius: 10,
-                  backgroundColor: 'var(--hover)',
-                  transition: 'background 0.15s ease',
-                }}
-              >
-                Back to Chats
-              </button>
+          {/* TAB 2: STORIES / SOCIAL FEED */}
+          {activeTab === 'stories' && (
+            <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', backgroundColor: 'var(--wall)', overflowY: 'auto' }}>
+              <StoryFeedView
+                onOpenStoryViewer={(idx, feeds) => handleOpenStoryViewerWithFeeds(idx, feeds || allStoryFeeds)}
+                onOpenCreateStory={() => setShowCreateStory(true)}
+                onSelectUserChat={(username) => handleOpenPeerChat(username)}
+              />
             </div>
+          )}
 
-            {/* Scrollable View Content */}
-            <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
-              {activeTab === 'stories' && (
-                <StoryFeedView
-                  onOpenStoryViewer={(idx, feeds) => handleOpenStoryViewerWithFeeds(idx, feeds || allStoryFeeds)}
-                  onOpenCreateStory={() => setShowCreateStory(true)}
-                  onSelectUserChat={(username) => handleOpenPeerChat(username)}
-                />
-              )}
-
-              {activeTab === 'games' && (
-                <GamesCenter
-                  isEmbedded={true}
-                  conversationId={selectedConversation?.id}
-                  initialOpponent={
-                    (selectedConversation as any)?.otherUser
-                      ? {
-                          id: (selectedConversation as any).otherUser.id,
-                          username: (selectedConversation as any).otherUser.username,
-                          displayName: (selectedConversation as any).otherUser.displayName,
-                          avatarUrl: (selectedConversation as any).otherUser.avatarUrl,
-                          bio: (selectedConversation as any).otherUser.bio,
-                          isBot: (selectedConversation as any).otherUser.isBot,
-                          botPersona: (selectedConversation as any).otherUser.botPersona,
-                        }
-                      : selectedConversation?.title
-                      ? {
-                          id: selectedConversation.id,
-                          username: selectedConversation.title.toLowerCase(),
-                          displayName: selectedConversation.title,
-                          avatarUrl: selectedConversation.avatarUrl,
-                        }
-                      : undefined
-                  }
-                />
-              )}
-
-              {activeTab === 'nearby' && (
-                <NearbyModal
-                  isEmbedded={true}
-                  onSelectPeer={handleOpenPeerChat}
-                />
-              )}
-
-              {activeTab === 'profile' && (
-                <ProfileSettingsModal
-                  isEmbedded={true}
-                />
-              )}
+          {/* TAB 3: PLAY / GAMES */}
+          {activeTab === 'games' && (
+            <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', backgroundColor: 'var(--wall)', overflowY: 'auto' }}>
+              <GamesCenter
+                isEmbedded={true}
+                conversationId={selectedConversation?.id}
+                initialOpponent={selectedOpponent}
+              />
             </div>
+          )}
 
-            {/* Navigation tab bar (Always accessible at bottom!) */}
-            <NavTabs
-              activeTab={activeTab}
-              onSelectTab={handleSelectTab}
-              unreadMessagesCount={conversations.reduce((acc, c) => acc + (c.unreadCount || 0), 0)}
-            />
-          </div>
-        )}
+          {/* TAB 4: NEARBY RADAR */}
+          {activeTab === 'nearby' && (
+            <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', backgroundColor: 'var(--sir-bg)', overflowY: 'auto' }}>
+              <NearbyModal
+                isEmbedded={true}
+                onSelectPeer={handleOpenPeerChat}
+              />
+            </div>
+          )}
+
+          {/* TAB 5: PROFILE */}
+          {activeTab === 'profile' && (
+            <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', backgroundColor: 'var(--wall)', overflowY: 'auto' }}>
+              <ProfileSettingsModal
+                isEmbedded={true}
+              />
+            </div>
+          )}
+        </div>
+
+        {/* Permanent, rock-solid Native Bottom Navbar across all tabs */}
+        <NavTabs
+          activeTab={activeTab}
+          onSelectTab={handleSelectTab}
+          unreadMessagesCount={conversations.reduce((acc, c) => acc + (c.unreadCount || 0), 0)}
+        />
       </div>
 
-      {/* FULL IMMERSIVE STORY VIEWER (Tap through all friends' stories) */}
+      {/* FULL IMMERSIVE STORY VIEWER */}
       {activeFeedIndex !== null && allStoryFeeds.length > 0 && (
         <StoryViewerModal
           feeds={allStoryFeeds}

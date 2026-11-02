@@ -45,6 +45,7 @@ export const ChatList: React.FC<ChatListProps> = ({
   const formatTime = (isoString?: string) => {
     if (!isoString) return '';
     const d = new Date(isoString);
+    if (isNaN(d.getTime())) return '';
     const now = new Date();
     const isToday = d.toDateString() === now.toDateString();
     return isToday

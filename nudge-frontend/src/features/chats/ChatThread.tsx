@@ -507,7 +507,7 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
         }}
       >
         {messages.map((msg) => {
-          const isMe = msg.senderId === user?.id;
+          const isMe = (msg.senderId || (msg as any).sender_id || msg.sender?.id) === user?.id;
           const showReactions = activeReactionMsgId === msg.id;
 
           if (msg.type === 'game') {
@@ -605,7 +605,13 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
                   }}
                 >
                   <span>
-                    {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    {(() => {
+                      const rawDate = msg.createdAt || (msg as any).created_at || (msg as any).t;
+                      const d = rawDate ? new Date(rawDate) : new Date();
+                      return isNaN(d.getTime())
+                        ? new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                        : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                    })()}
                   </span>
                   {isMe && (
                     <span>
