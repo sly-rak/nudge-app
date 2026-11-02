@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Conversation } from '@nudge/shared';
-import { Search, Pin, Plus, Clock, Archive, ChevronDown, ChevronRight, Users } from 'lucide-react';
+import { Search, Pin, Plus, Clock, Archive, ChevronDown, ChevronRight, Users, Flame } from 'lucide-react';
 import { Avatar } from '../../components/Avatar.js';
 import { StatusChip } from '../../components/StatusChip.js';
 import { usePresence } from '../../context/PresenceContext.js';
@@ -23,6 +23,18 @@ export const ChatList: React.FC<ChatListProps> = ({
   const { isOnline } = usePresence();
   const [search, setSearch] = useState('');
   const [showArchived, setShowArchived] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   const getExpirationBadge = (endsAt?: string) => {
     if (!endsAt) return null;
@@ -42,6 +54,14 @@ export const ChatList: React.FC<ChatListProps> = ({
     const title = c.title || '';
     const lastMsg = c.lastMessage?.body || '';
     return title.toLowerCase().includes(search.toLowerCase()) || lastMsg.toLowerCase().includes(search.toLowerCase());
+  });
+
+  const sortedConversations = [...filteredConversations].sort((a, b) => {
+    if (a.isPinned && !b.isPinned) return -1;
+    if (!a.isPinned && b.isPinned) return 1;
+    const timeA = new Date(a.lastMessageAt || a.createdAt || 0).getTime();
+    const timeB = new Date(b.lastMessageAt || b.createdAt || 0).getTime();
+    return timeB - timeA;
   });
 
   const formatTime = (isoString?: string) => {
@@ -74,6 +94,7 @@ export const ChatList: React.FC<ChatListProps> = ({
         >
           <Search size={16} color="var(--muted)" />
           <input
+            ref={searchInputRef}
             type="search"
             placeholder="Search chats, groups & bots"
             value={search}
@@ -140,15 +161,19 @@ export const ChatList: React.FC<ChatListProps> = ({
 
       {/* Conversations List */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '0 8px 12px' }}>
-        {filteredConversations.length === 0 ? (
+        {sortedConversations.length === 0 ? (
           <div style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--muted)', fontSize: 13 }}>
             No conversations found.
           </div>
         ) : (
-          filteredConversations.map((conv) => {
+          sortedConversations.map((conv) => {
             const isSelected = conv.id === selectedId;
             const otherUser = (conv as any).otherUser;
             const expBadge = getExpirationBadge(conv.endsAt);
+            const isVanish = Boolean(
+              (conv.disappearSeconds && conv.disappearSeconds > 0) ||
+              (conv.disappearingSeconds && conv.disappearingSeconds > 0)
+            );
 
             return (
               <div
@@ -206,6 +231,20 @@ export const ChatList: React.FC<ChatListProps> = ({
                         {conv.title || 'Conversation'}
                       </span>
                       {conv.isPinned && <Pin size={12} color="var(--accent)" />}
+                      {isVanish && (
+                        <span
+                          style={{
+                            fontSize: 11,
+                            fontWeight: 700,
+                            color: 'var(--vanish, #DF4B2F)',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 2,
+                          }}
+                        >
+                          · vanish
+                        </span>
+                      )}
                       {expBadge && (
                         <span
                           style={{

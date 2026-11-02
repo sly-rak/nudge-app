@@ -237,32 +237,42 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
       messagesRes = await query(
         `SELECT m.id, m.conversation_id as "conversationId", m.room_id as "roomId",
                 m.seq, m.sender_id as "senderId", m.client_msg_id as "clientMsgId",
-                m.type, m.body, m.media_url as "mediaUrl",
+                m.type, m.body, m.media_url as "mediaUrl", m.media_metadata as "mediaMetadata",
                 m.reply_to_id as "replyToId", m.edited_at as "editedAt", m.deleted_at as "deletedAt",
+                m.expires_at as "expiresAt", m.is_starred as "isStarred",
                 m.created_at as "createdAt",
                 u.username, u.display_name as "senderDisplayName", u.avatar_url as "senderAvatarUrl",
-                u.avatar_kind as "senderAvatarKind"
+                u.avatar_kind as "senderAvatarKind",
+                rm.body as "replyToBody", ru.display_name as "replyToSenderName"
          FROM messages m
          JOIN users u ON m.sender_id = u.id
+         LEFT JOIN messages rm ON m.reply_to_id = rm.id
+         LEFT JOIN users ru ON rm.sender_id = ru.id
          WHERE m.conversation_id = $1 AND m.room_id = $2 AND m.deleted_at IS NULL
+           AND (m.expires_at IS NULL OR m.expires_at > NOW())
          ORDER BY m.seq ASC
-         LIMIT 100`,
+         LIMIT 150`,
         [id, roomId]
       );
     } else {
       messagesRes = await query(
         `SELECT m.id, m.conversation_id as "conversationId", m.room_id as "roomId",
                 m.seq, m.sender_id as "senderId", m.client_msg_id as "clientMsgId",
-                m.type, m.body, m.media_url as "mediaUrl",
+                m.type, m.body, m.media_url as "mediaUrl", m.media_metadata as "mediaMetadata",
                 m.reply_to_id as "replyToId", m.edited_at as "editedAt", m.deleted_at as "deletedAt",
+                m.expires_at as "expiresAt", m.is_starred as "isStarred",
                 m.created_at as "createdAt",
                 u.username, u.display_name as "senderDisplayName", u.avatar_url as "senderAvatarUrl",
-                u.avatar_kind as "senderAvatarKind"
+                u.avatar_kind as "senderAvatarKind",
+                rm.body as "replyToBody", ru.display_name as "replyToSenderName"
          FROM messages m
          JOIN users u ON m.sender_id = u.id
+         LEFT JOIN messages rm ON m.reply_to_id = rm.id
+         LEFT JOIN users ru ON rm.sender_id = ru.id
          WHERE m.conversation_id = $1 AND m.deleted_at IS NULL
+           AND (m.expires_at IS NULL OR m.expires_at > NOW())
          ORDER BY m.seq ASC
-         LIMIT 100`,
+         LIMIT 150`,
         [id]
       );
     }
@@ -289,8 +299,22 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
       }
     }
 
+    // Fetch pinned message if conversation has one
+    const convInfo = await query('SELECT pinned_message_id as "pinnedMessageId", disappear_seconds as "disappearSeconds" FROM conversations WHERE id = $1', [id]);
+    const pinnedMessageId = convInfo.rows[0]?.pinnedMessageId;
+    const disappearSeconds = convInfo.rows[0]?.disappearSeconds || 0;
+
     const messages = messagesRes.rows.map((m) => ({
       ...m,
+      isPinned: pinnedMessageId === m.id,
+      isStarred: !!m.isStarred,
+      replyTo: m.replyToId
+        ? {
+            id: m.replyToId,
+            body: m.replyToBody || '',
+            sender: { displayName: m.replyToSenderName || 'User' },
+          }
+        : undefined,
       sender: {
         id: m.senderId,
         username: m.username,
@@ -301,14 +325,14 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
       reactions: reactionsMap[m.id] || [],
     }));
 
-    return { messages };
+    return { messages, disappearSeconds, pinnedMessageId };
   });
 
   // Send message
   fastify.post('/:id/messages', async (request, reply) => {
     const decoded = request.user as { id: string };
     const { id } = request.params as { id: string };
-    const { body, type = 'text', mediaUrl, replyToId, clientMsgId, roomId } = request.body as any;
+    const { body, type = 'text', mediaUrl, mediaMetadata, replyToId, clientMsgId, roomId, vanishSeconds } = request.body as any;
 
     const memCheck = await query(
       'SELECT 1 FROM conversation_members WHERE conversation_id = $1 AND user_id = $2',
@@ -319,22 +343,60 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     const convResult = await query(
-      'UPDATE conversations SET last_seq = last_seq + 1, last_message_at = NOW() WHERE id = $1 RETURNING last_seq',
+      'UPDATE conversations SET last_seq = last_seq + 1, last_message_at = NOW() WHERE id = $1 RETURNING last_seq, disappear_seconds',
       [id]
     );
     const nextSeq = convResult.rows[0].last_seq;
+    const convVanish = convResult.rows[0].disappear_seconds || 0;
+    const effectiveVanish = vanishSeconds !== undefined ? vanishSeconds : convVanish;
+
+    let expiresAt: string | null = null;
+    if (effectiveVanish && effectiveVanish > 0) {
+      expiresAt = new Date(Date.now() + effectiveVanish * 1000).toISOString();
+    }
 
     const msgResult = await query(
-      `INSERT INTO messages (conversation_id, room_id, seq, sender_id, client_msg_id, type, body, media_url, reply_to_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      `INSERT INTO messages (conversation_id, room_id, seq, sender_id, client_msg_id, type, body, media_url, media_metadata, reply_to_id, expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING *`,
-      [id, roomId || null, nextSeq, decoded.id, clientMsgId || null, type, body || '', mediaUrl || null, replyToId || null]
+      [
+        id,
+        roomId || null,
+        nextSeq,
+        decoded.id,
+        clientMsgId || null,
+        type,
+        body || '',
+        mediaUrl || null,
+        mediaMetadata ? JSON.stringify(mediaMetadata) : null,
+        replyToId || null,
+        expiresAt,
+      ]
     );
 
     const userResult = await query(
       'SELECT id, username, display_name as "displayName", avatar_url as "avatarUrl", avatar_kind as "avatarKind" FROM users WHERE id = $1',
       [decoded.id]
     );
+
+    // Optional reply preview lookup
+    let replyTo = undefined;
+    if (replyToId) {
+      const repRes = await query(
+        `SELECT m.id, m.body, u.display_name as "senderDisplayName"
+         FROM messages m
+         JOIN users u ON m.sender_id = u.id
+         WHERE m.id = $1`,
+        [replyToId]
+      );
+      if (repRes.rowCount && repRes.rowCount > 0) {
+        replyTo = {
+          id: repRes.rows[0].id,
+          body: repRes.rows[0].body,
+          sender: { displayName: repRes.rows[0].senderDisplayName },
+        };
+      }
+    }
 
     const row = msgResult.rows[0];
     const newMsg = {
@@ -347,12 +409,17 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
       type: row.type,
       body: row.body,
       mediaUrl: row.media_url,
+      mediaMetadata: row.media_metadata,
       replyToId: row.reply_to_id,
+      replyTo,
       editedAt: row.edited_at,
       deletedAt: row.deleted_at,
+      expiresAt: row.expires_at,
       createdAt: row.created_at,
       sender: userResult.rows[0],
       reactions: [],
+      isStarred: false,
+      isPinned: false,
     };
 
     // Broadcast in real-time
@@ -540,5 +607,116 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
     });
 
     return { success: true };
+  });
+
+  // Toggle Vanish / Ghost Mode for conversation
+  fastify.post('/:id/vanish', async (request) => {
+    const { id } = request.params as { id: string };
+    const { seconds = 10 } = request.body as any;
+    const res = await query(
+      'UPDATE conversations SET disappear_seconds = $1 WHERE id = $2 RETURNING disappear_seconds',
+      [seconds, id]
+    );
+    const updated = res.rows[0]?.disappear_seconds || 0;
+    await realtimeGateway.broadcastToConversation(id, {
+      t: 'conversation.updated',
+      d: { conversationId: id, disappearSeconds: updated },
+    });
+    return { success: true, disappearSeconds: updated };
+  });
+
+  // Toggle Star / Unstar on message
+  fastify.post('/:id/messages/:messageId/star', async (request) => {
+    const { messageId } = request.params as { messageId: string };
+    const res = await query(
+      'UPDATE messages SET is_starred = NOT COALESCE(is_starred, false) WHERE id = $1 RETURNING is_starred',
+      [messageId]
+    );
+    return { success: true, isStarred: !!res.rows[0]?.is_starred };
+  });
+
+  // Toggle Pin message on conversation
+  fastify.post('/:id/messages/:messageId/pin', async (request) => {
+    const { id, messageId } = request.params as { id: string; messageId: string };
+    const convRes = await query('SELECT pinned_message_id FROM conversations WHERE id = $1', [id]);
+    const currentPinned = convRes.rows[0]?.pinned_message_id;
+    const newPinned = currentPinned === messageId ? null : messageId;
+    await query('UPDATE conversations SET pinned_message_id = $1 WHERE id = $2', [newPinned, id]);
+    await realtimeGateway.broadcastToConversation(id, {
+      t: 'conversation.updated',
+      d: { conversationId: id, pinnedMessageId: newPinned },
+    });
+    return { success: true, pinnedMessageId: newPinned };
+  });
+
+  // Delete message (soft delete)
+  fastify.delete('/:id/messages/:messageId', async (request) => {
+    const { id, messageId } = request.params as { id: string; messageId: string };
+    await query('UPDATE messages SET deleted_at = NOW() WHERE id = $1', [messageId]);
+    await realtimeGateway.broadcastToConversation(id, {
+      t: 'message.deleted',
+      d: { conversationId: id, messageId },
+    });
+    return { success: true };
+  });
+
+  // Clear chat (soft delete all messages in conversation)
+  fastify.post('/:id/clear', async (request) => {
+    const { id } = request.params as { id: string };
+    await query('UPDATE messages SET deleted_at = NOW() WHERE conversation_id = $1', [id]);
+    await realtimeGateway.broadcastToConversation(id, {
+      t: 'conversation.cleared',
+      d: { conversationId: id },
+    });
+    return { success: true };
+  });
+
+  // Get Starred messages
+  fastify.get('/:id/starred', async (request) => {
+    const { id } = request.params as { id: string };
+    const res = await query(
+      `SELECT m.id, m.conversation_id as "conversationId", m.seq, m.sender_id as "senderId",
+              m.type, m.body, m.media_url as "mediaUrl", m.media_metadata as "mediaMetadata",
+              m.created_at as "createdAt", u.display_name as "senderDisplayName", u.avatar_url as "senderAvatarUrl"
+       FROM messages m
+       JOIN users u ON m.sender_id = u.id
+       WHERE m.conversation_id = $1 AND m.is_starred = true AND m.deleted_at IS NULL
+       ORDER BY m.seq DESC`,
+      [id]
+    );
+    const messages = res.rows.map((r) => ({
+      ...r,
+      isStarred: true,
+      sender: {
+        id: r.senderId,
+        displayName: r.senderDisplayName,
+        avatarUrl: r.senderAvatarUrl,
+      },
+    }));
+    return { messages };
+  });
+
+  // Get Media Gallery items (Photos, Videos, Documents, Voice notes, Links)
+  fastify.get('/:id/media', async (request) => {
+    const { id } = request.params as { id: string };
+    const res = await query(
+      `SELECT m.id, m.conversation_id as "conversationId", m.seq, m.sender_id as "senderId",
+              m.type, m.body, m.media_url as "mediaUrl", m.media_metadata as "mediaMetadata",
+              m.created_at as "createdAt", u.display_name as "senderDisplayName"
+       FROM messages m
+       JOIN users u ON m.sender_id = u.id
+       WHERE m.conversation_id = $1 AND m.deleted_at IS NULL
+         AND (m.type IN ('image', 'video', 'audio', 'voice', 'file', 'gif', 'sticker') OR m.body ~* 'https?://[^\s]+')
+       ORDER BY m.seq DESC`,
+      [id]
+    );
+    const items = res.rows.map((r) => ({
+      ...r,
+      sender: {
+        id: r.senderId,
+        displayName: r.senderDisplayName,
+      },
+    }));
+    return { items };
   });
 };

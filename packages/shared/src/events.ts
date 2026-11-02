@@ -4,8 +4,10 @@ export type RealtimeServerEvent =
   | { t: 'authenticated'; d: { userId: string } }
   | { t: 'message.new'; d: { conversationId: string; roomId?: string; message: Message } }
   | { t: 'message.updated'; d: { conversationId: string; message: Message } }
+  | { t: 'message.deleted'; d: { conversationId: string; messageId: string } }
   | { t: 'message.status'; d: { conversationId: string; lastDeliveredSeq: number; lastReadSeq: number } }
-  | { t: 'conversation.updated'; d: { conversation: Conversation } }
+  | { t: 'conversation.updated'; d: { conversationId: string; conversation?: Partial<Conversation>; disappearSeconds?: number; pinnedMessageId?: string | null } }
+  | { t: 'conversation.cleared'; d: { conversationId: string } }
   | { t: 'typing'; d: { conversationId: string; userId: string; isTyping: boolean } }
   | { t: 'presence'; d: { userId: string; isOnline: boolean; lastSeenAt?: string; status?: UserStatus } }
   | { t: 'game.state'; d: { sessionId: string; state: Record<string, any>; turnUserId?: string; winnerId?: string; status: string } }

@@ -65,11 +65,15 @@ export interface Conversation {
   isPinned?: boolean;
   isArchived?: boolean;
   disappearingSeconds?: number;
+  disappearSeconds?: number;
   endsAt?: string;
   archivedAt?: string;
+  pinnedMessageId?: string;
+  pinnedMessage?: Message;
   rooms?: Room[];
   activeRoomId?: string;
   members?: ConversationMember[];
+  customTheme?: { accent?: string; wallpaper?: string; tone?: string };
 }
 
 export interface ConversationMember {
@@ -87,8 +91,22 @@ export type MessageType =
   | 'image'
   | 'video'
   | 'audio'
+  | 'voice'
+  | 'file'
+  | 'gif'
+  | 'sticker'
   | 'game'
   | 'system';
+
+export interface MediaMetadata {
+  name?: string;
+  size?: number;
+  mime?: string;
+  dur?: number;
+  wave?: number[];
+  url?: string;
+  sim?: boolean;
+}
 
 export interface MessageReaction {
   userId: string;
@@ -106,12 +124,18 @@ export interface Message {
   type: MessageType;
   body: string;
   mediaUrl?: string;
+  mediaMetadata?: MediaMetadata;
   replyToId?: string;
-  replyTo?: Message;
+  replyTo?: Partial<Message>;
   editedAt?: string;
   deletedAt?: string;
   expiresAt?: string;
   vanishAfterRead?: boolean;
+  vanishSeconds?: number;
+  isStarred?: boolean;
+  isPinned?: boolean;
+  status?: 'sent' | 'delivered' | 'read';
+  readAt?: string;
   createdAt: string;
   reactions?: MessageReaction[];
   sender?: Partial<User>;

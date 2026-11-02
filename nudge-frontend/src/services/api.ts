@@ -160,15 +160,56 @@ class ApiClient {
       body: string;
       type?: string;
       mediaUrl?: string;
+      mediaMetadata?: any;
       replyToId?: string;
       clientMsgId?: string;
       roomId?: string;
+      vanishSeconds?: number;
     }
   ) {
     return this.request<{ message: Message }>(`/conversations/${conversationId}/messages`, {
       method: 'POST',
       body: JSON.stringify(data),
     });
+  }
+
+  async setVanishMode(conversationId: string, seconds: number) {
+    return this.request<{ success: boolean; disappearSeconds: number }>(`/conversations/${conversationId}/vanish`, {
+      method: 'POST',
+      body: JSON.stringify({ seconds }),
+    });
+  }
+
+  async starMessage(conversationId: string, messageId: string) {
+    return this.request<{ success: boolean; isStarred: boolean }>(`/conversations/${conversationId}/messages/${messageId}/star`, {
+      method: 'POST',
+    });
+  }
+
+  async pinMessage(conversationId: string, messageId: string) {
+    return this.request<{ success: boolean; pinnedMessageId: string | null }>(`/conversations/${conversationId}/messages/${messageId}/pin`, {
+      method: 'POST',
+    });
+  }
+
+  async deleteMessage(conversationId: string, messageId: string) {
+    return this.request<{ success: boolean }>(`/conversations/${conversationId}/messages/${messageId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async clearChat(conversationId: string) {
+    return this.request<{ success: boolean }>(`/conversations/${conversationId}/clear`, {
+      method: 'POST',
+    });
+  }
+
+  async getStarredMessages(conversationId: string) {
+    return this.request<{ messages: Message[] }>(`/conversations/${conversationId}/starred`);
+  }
+
+  async getMediaGallery(conversationId: string) {
+    return this.request<{ items: any[] }>(`/conversations/${conversationId}/media`);
   }
 
   async addRoom(conversationId: string, room: { name: string; emoji?: string; adminOnly?: boolean }) {
