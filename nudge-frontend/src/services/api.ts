@@ -361,13 +361,51 @@ class ApiClient {
   }
 
   async getGameSession(sessionId: string) {
-    return this.request<{ session: GameSession }>(`/games/sessions/${sessionId}`);
+    return this.request<{ session: GameSession; opponent?: any }>(`/games/sessions/${sessionId}`);
   }
 
-  async makeGameMove(sessionId: string, move: any) {
+  async makeGameMove(sessionId: string, move: any, who: string = 'me') {
     return this.request<{ session: GameSession }>(`/games/sessions/${sessionId}/move`, {
       method: 'POST',
-      body: JSON.stringify({ move }),
+      body: JSON.stringify({ move, who }),
+    });
+  }
+
+  async sendGameInvite(conversationId: string, gameKey: string) {
+    return this.request<{ message: Message }>('/games/invites', {
+      method: 'POST',
+      body: JSON.stringify({ conversationId, gameKey }),
+    });
+  }
+
+  async respondGameInvite(messageId: string, action: 'accept' | 'decline' | 'cancel') {
+    return this.request<{ success: boolean; sessionId?: string }>(`/games/invites/${messageId}/respond`, {
+      method: 'POST',
+      body: JSON.stringify({ action }),
+    });
+  }
+
+  // Looking For Game (LFG) Posts
+  async getLFGPosts() {
+    return this.request<{ posts: any[] }>('/games/lfg');
+  }
+
+  async createLFGPost(data: { gameKey: string; mode: string; playersNeeded: number; note?: string }) {
+    return this.request<{ post: any }>('/games/lfg', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async joinLFGPost(postId: string) {
+    return this.request<{ success: boolean; post: any }>(`/games/lfg/${postId}/join`, {
+      method: 'POST',
+    });
+  }
+
+  async closeLFGPost(postId: string) {
+    return this.request<{ success: boolean }>(`/games/lfg/${postId}/close`, {
+      method: 'POST',
     });
   }
 }

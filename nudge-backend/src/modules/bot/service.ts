@@ -1,5 +1,14 @@
 import { query } from '../../db/index.js';
 import { realtimeGateway } from '../../realtime/gateway.js';
+import {
+  normalizeGameKey,
+  tttEngine,
+  tl,
+  c4Engine,
+  checkersEngine,
+  chessEngine,
+  oth,
+} from '@nudge/shared';
 
 interface BotUser {
   id: string;
@@ -611,116 +620,95 @@ export class BotService {
       if (session.status !== 'in_progress') return;
 
       // Find the bot player
-      let botUserId: string | null = null;
-      if (session.game_key === 'tictactoe') {
-        const state = session.state;
-        const playerX = state.playerX;
-        const playerO = state.playerO;
+      const gid = normalizeGameKey(session.game_key);
+      const state = session.state;
+      const expectedTurnUserId = state.playerThem || state.playerO || state.playerYellow || state.playerOpp;
+      if (!expectedTurnUserId) return;
 
-        // Check if current turn belongs to a bot
-        const currentTurn = state.turn; // 'X' or 'O'
-        const expectedTurnUserId = currentTurn === 'X' ? playerX : playerO;
+      // Verify if expectedTurnUserId is a bot
+      const botCheck = await query(
+        'SELECT id, username, display_name FROM users WHERE id = $1 AND is_bot = true',
+        [expectedTurnUserId]
+      );
+      if (botCheck.rowCount === 0) return; // not bot's turn
 
-        // Verify if expectedTurnUserId is a bot
-        const botCheck = await query(
-          'SELECT id, username, display_name FROM users WHERE id = $1 AND is_bot = true',
-          [expectedTurnUserId]
-        );
-        if (botCheck.rowCount === 0) return; // not bot's turn
+      const botUserId = botCheck.rows[0].id;
+      const botName = botCheck.rows[0].display_name;
+      const botUsername = botCheck.rows[0].username.toLowerCase();
 
-        botUserId = botCheck.rows[0].id;
-        const botName = botCheck.rows[0].display_name;
-        const botUsername = botCheck.rows[0].username.toLowerCase();
+      let chosenMove: any = null;
+      let nextState = { ...state };
+      let winnerId = null;
+      let status = 'in_progress';
 
-        // AI Logic for Tic-Tac-Toe
-        const board: (string | null)[] = [...state.board];
-        const botSymbol = currentTurn;
-        const oppSymbol = botSymbol === 'X' ? 'O' : 'X';
-
-        // 1. Try to win
-        let chosenMove = -1;
-        for (let i = 0; i < 9; i++) {
-          if (!board[i]) {
-            board[i] = botSymbol;
-            if (this.checkWin(board, botSymbol)) {
-              chosenMove = i;
-              board[i] = null;
-              break;
-            }
-            board[i] = null;
+      if (gid === 'ttt') {
+        const rawB = [...(state.b || state.board || Array(9).fill(''))];
+        const b = rawB.map((c: string) => c === 'X' ? 'me' : c === 'O' ? 'them' : '');
+        const mv = tttEngine.ai(b);
+        chosenMove = +mv;
+        b[chosenMove] = 'them';
+        const boardWithO = rawB.slice();
+        boardWithO[chosenMove] = 'O';
+        const r = tl(b);
+        nextState = { ...state, b, board: boardWithO, turn: 'X' };
+        if (r) {
+          status = 'completed';
+          winnerId = r === 'draw' ? null : r === 'them' ? botUserId : humanUserId;
+        }
+      } else if (gid === 'c4') {
+        const b = [...(state.b || state.board || Array(42).fill(''))];
+        const mv = c4Engine.ai(b);
+        chosenMove = +mv;
+        const res = c4Engine.act(b, 'them', chosenMove);
+        nextState = { ...state, b, board: b, last: res?.last, turn: 'me' };
+        if (res?.end) {
+          status = 'completed';
+          winnerId = res.end === 'draw' ? null : res.end === 'them' ? botUserId : humanUserId;
+        }
+      } else if (gid === 'checkers') {
+        const mv = checkersEngine.ai(state);
+        if (mv) {
+          chosenMove = mv;
+          const res = checkersEngine.act(nextState, 'them', mv);
+          if (!nextState.cont) nextState.turn = 'me';
+          if (res?.end) {
+            status = 'completed';
+            winnerId = res.end === 'draw' ? null : res.end === 'them' ? botUserId : humanUserId;
           }
         }
-
-        // 2. Block opponent
-        if (chosenMove < 0) {
-          for (let i = 0; i < 9; i++) {
-            if (!board[i]) {
-              board[i] = oppSymbol;
-              if (this.checkWin(board, oppSymbol)) {
-                chosenMove = i;
-                board[i] = null;
-                break;
-              }
-              board[i] = null;
-            }
+      } else if (gid === 'chess') {
+        const mv = chessEngine.ai(state, 'b');
+        if (mv) {
+          chosenMove = mv;
+          const res = chessEngine.act(nextState, 'b', mv);
+          nextState.turn = 'me';
+          if (res?.end) {
+            status = 'completed';
+            winnerId = res.end === 'draw' ? null : res.end === 'b' ? botUserId : humanUserId;
           }
         }
+      }
 
-        // 3. Take center
-        if (chosenMove < 0 && !board[4]) {
-          chosenMove = 4;
-        }
+      if (chosenMove !== null) {
+        // Play with 700ms delay for realism
+        setTimeout(async () => {
+          try {
+            await query(
+              `UPDATE game_sessions
+               SET state = $2, winner_id = $3, status = $4, updated_at = NOW()
+               WHERE id = $1`,
+              [sessionId, JSON.stringify(nextState), winnerId, status]
+            );
 
-        // 4. Take corners
-        if (chosenMove < 0) {
-          const corners = [0, 2, 6, 8].filter((idx) => !board[idx]);
-          if (corners.length > 0) {
-            chosenMove = corners[Math.floor(Math.random() * corners.length)];
-          }
-        }
-
-        // 5. Take any remaining
-        if (chosenMove < 0) {
-          const remaining = [1, 3, 5, 7].filter((idx) => !board[idx]);
-          if (remaining.length > 0) {
-            chosenMove = remaining[0];
-          }
-        }
-
-        if (chosenMove >= 0) {
-          // Play with 700ms delay for realism
-          setTimeout(async () => {
-            try {
-              board[chosenMove] = botSymbol;
-              let winnerId = null;
-              let status = 'in_progress';
-
-              if (this.checkWin(board, botSymbol)) {
-                winnerId = botUserId;
-                status = 'completed';
-              } else if (board.every((cell) => cell !== null)) {
-                status = 'completed'; // draw
-              }
-
-              const nextTurn = botSymbol === 'X' ? 'O' : 'X';
-              const updatedState = { ...state, board, turn: nextTurn };
-
-              await query(
-                `UPDATE game_sessions
-                 SET state = $2, winner_id = $3, status = $4, updated_at = NOW()
-                 WHERE id = $1`,
-                [sessionId, JSON.stringify(updatedState), winnerId, status]
-              );
-
-              const eventPayload = {
-                t: 'game.state' as const,
-                d: {
-                  sessionId,
-                  state: updatedState,
-                  winnerId: winnerId || undefined,
-                  status,
-                },
-              };
+            const eventPayload = {
+              t: 'game.state' as const,
+              d: {
+                sessionId,
+                state: nextState,
+                winnerId: winnerId || undefined,
+                status,
+              },
+            };
 
               if (session.conversation_id) {
                 await realtimeGateway.broadcastToConversation(session.conversation_id, eventPayload);
@@ -798,7 +786,6 @@ export class BotService {
             }
           }, 400);
         }
-      }
     } catch (err) {
       console.error('[BotService] handleGameMove error:', err);
     }

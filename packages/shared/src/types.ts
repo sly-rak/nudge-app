@@ -99,6 +99,37 @@ export type MessageType =
   | 'game'
   | 'system';
 
+export interface GameCardData {
+  gid: string;
+  st: 'invite' | 'playing' | 'done' | 'declined' | 'cancelled';
+  by: string;
+  turn?: string | null;
+  t0: number;
+  t1?: number | null;
+  who?: string[];
+  nm?: string;
+  res?: 'win' | 'loss' | 'draw' | null;
+  sc?: Record<string, number>;
+  S?: Record<string, any>;
+  sessionId?: string;
+}
+
+export interface LFGPost {
+  id: string;
+  by: string;
+  byUser?: User;
+  gameKey: string;
+  mode: '1v1' | 'party';
+  playersNeeded: number;
+  joined: { id: string; name: string }[];
+  note?: string;
+  status: 'open' | 'matched' | 'closed';
+  matchSessionId?: string;
+  conversationId?: string;
+  messageId?: string;
+  createdAt: string;
+}
+
 export interface MediaMetadata {
   name?: string;
   size?: number;
@@ -107,6 +138,7 @@ export interface MediaMetadata {
   wave?: number[];
   url?: string;
   sim?: boolean;
+  game?: GameCardData;
 }
 
 export interface MessageReaction {
@@ -126,6 +158,7 @@ export interface Message {
   body: string;
   mediaUrl?: string;
   mediaMetadata?: MediaMetadata;
+  game?: GameCardData;
   replyToId?: string;
   replyTo?: Partial<Message>;
   editedAt?: string;

@@ -2,6 +2,23 @@ import { FastifyPluginAsync } from 'fastify';
 import { query } from '../../db/index.js';
 import { realtimeGateway } from '../../realtime/gateway.js';
 import { botService } from '../bot/service.js';
+import {
+  GM,
+  GORDER,
+  normalizeGameKey,
+  tttEngine,
+  tl,
+  c4Engine,
+  checkersEngine,
+  chessEngine,
+  initTriviaRound,
+  initWordRound,
+  rpsBeats,
+  rpsTally,
+  TQ,
+  WL,
+  oth,
+} from '@nudge/shared';
 
 export const gameRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.addHook('onRequest', async (request, reply) => {
@@ -12,50 +29,27 @@ export const gameRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  // Game catalog
+  // 1. Game Catalog (All 7 games matching nudge-standalone GM registry)
   fastify.get('/', async () => {
-    return {
-      games: [
-        {
-          key: 'tictactoe',
-          name: 'Tic-Tac-Toe',
-          description: 'Classic 3x3 turn-based board duel',
-          icon: 'Grid',
-          players: 2,
-        },
-        {
-          key: 'connect4',
-          name: 'Four in a Row',
-          description: 'Drop discs and connect 4 before your friend',
-          icon: 'Disc',
-          players: 2,
-        },
-        {
-          key: 'rps',
-          name: 'Rock Paper Scissors',
-          description: 'Best-of-three quick reflex duel',
-          icon: 'Hand',
-          players: 2,
-        },
-        {
-          key: 'wordguess',
-          name: 'Word Guess',
-          description: 'Guess the secret 5-letter word in 6 tries',
-          icon: 'SpellCheck',
-          players: 2,
-        },
-      ],
-    };
+    const games = GORDER.map((k) => ({
+      key: k,
+      name: GM[k].n,
+      icon: GM[k].e,
+      description: GM[k].d,
+      isParty: Boolean(GM[k].par),
+      players: GM[k].par ? 4 : 2,
+    }));
+    return { games };
   });
 
-  // Create game session
+  // 2. Create Game Session
   fastify.post('/sessions', async (request) => {
     const decoded = request.user as { id: string };
-    const { gameKey = 'tictactoe', conversationId, opponentId } = request.body as any;
+    const { gameKey = 'ttt', conversationId, opponentId } = request.body as any;
+    const gid = normalizeGameKey(gameKey);
 
     let targetOpponentId = opponentId;
 
-    // If opponentId is not passed but conversationId is, look up other member
     if (!targetOpponentId && conversationId) {
       const otherRes = await query(
         'SELECT user_id FROM conversation_members WHERE conversation_id = $1 AND user_id != $2 LIMIT 1',
@@ -66,7 +60,6 @@ export const gameRoutes: FastifyPluginAsync = async (fastify) => {
       }
     }
 
-    // Default to Tola if still no opponent specified
     if (!targetOpponentId) {
       const defaultBot = await query(
         `SELECT id FROM users WHERE (username = 'tola' OR is_bot = true) AND id != $1 ORDER BY (username = 'tola') DESC LIMIT 1`,
@@ -77,35 +70,63 @@ export const gameRoutes: FastifyPluginAsync = async (fastify) => {
       }
     }
 
+    // Initialize board state according to game engine
     let initialState: Record<string, any> = {};
-    if (gameKey === 'tictactoe') {
+    if (gid === 'ttt') {
+      const b = Array(9).fill('');
       initialState = {
-        board: Array(9).fill(null),
+        b,
+        board: b,
         turn: 'X',
         playerX: decoded.id,
         playerO: targetOpponentId || null,
+        playerMe: decoded.id,
+        playerThem: targetOpponentId || null,
       };
-    } else if (gameKey === 'connect4') {
+    } else if (gid === 'c4') {
+      const b = Array(42).fill('');
       initialState = {
-        board: Array(42).fill(null),
-        turn: 'red',
-        playerRed: decoded.id,
-        playerYellow: targetOpponentId || null,
-        lastMove: null,
+        b,
+        board: b,
+        last: -1,
+        turn: 'me',
+        playerMe: decoded.id,
+        playerThem: targetOpponentId || null,
       };
-    } else if (gameKey === 'rps') {
+    } else if (gid === 'checkers') {
+      const s = checkersEngine.init();
       initialState = {
-        rounds: [],
-        playerUser: decoded.id,
-        playerOpp: targetOpponentId || null,
-        userScore: 0,
-        oppScore: 0,
+        ...s,
+        turn: 'me',
+        playerMe: decoded.id,
+        playerThem: targetOpponentId || null,
       };
-    } else if (gameKey === 'wordguess') {
+    } else if (gid === 'chess') {
+      const s = chessEngine.init('w');
       initialState = {
-        secret: 'NUDGE',
-        guesses: [],
-        maxAttempts: 6,
+        ...s,
+        turn: 'me',
+        first: 'me',
+        playerMe: decoded.id,
+        playerThem: targetOpponentId || null,
+      };
+    } else if (gid === 'rps') {
+      initialState = {
+        rd: [],
+        playerMe: decoded.id,
+        playerThem: targetOpponentId || null,
+      };
+    } else if (gid === 'trivia') {
+      initialState = {
+        ...initTriviaRound(),
+        playerMe: decoded.id,
+        playerThem: targetOpponentId || null,
+      };
+    } else if (gid === 'word') {
+      initialState = {
+        ...initWordRound(),
+        playerMe: decoded.id,
+        playerThem: targetOpponentId || null,
       };
     }
 
@@ -114,7 +135,7 @@ export const gameRoutes: FastifyPluginAsync = async (fastify) => {
        VALUES ($1, $2, $3, $4, 'in_progress')
        RETURNING id, game_key as "gameKey", conversation_id as "conversationId", state, status,
                  created_by as "createdBy", created_at as "createdAt"`,
-      [gameKey, conversationId || null, JSON.stringify(initialState), decoded.id]
+      [gid, conversationId || null, JSON.stringify(initialState), decoded.id]
     );
 
     const session = res.rows[0];
@@ -134,7 +155,7 @@ export const gameRoutes: FastifyPluginAsync = async (fastify) => {
       }
     }
 
-    // If game has conversation, send system/game invitation message in conversation
+    // Broadcast or create in-chat message if conversationId provided
     if (conversationId) {
       const seqRes = await query(
         'UPDATE conversations SET last_seq = last_seq + 1, last_message_at = NOW() WHERE id = $1 RETURNING last_seq',
@@ -142,11 +163,29 @@ export const gameRoutes: FastifyPluginAsync = async (fastify) => {
       );
       const nextSeq = seqRes.rows[0].last_seq;
 
+      const gMeta = GM[gid] || { n: 'Game', e: '🎮' };
+      const gameCard = {
+        gid,
+        st: 'playing' as const,
+        by: 'me',
+        turn: 'me',
+        t0: Date.now(),
+        who: ['You', opponent?.displayName || 'Opponent'],
+        nm: opponent?.displayName || 'Opponent',
+        sessionId: session.id,
+      };
+
       const gameMsg = await query(
-        `INSERT INTO messages (conversation_id, seq, sender_id, type, body, created_at)
-         VALUES ($1, $2, $3, 'game', $4, NOW())
+        `INSERT INTO messages (conversation_id, seq, sender_id, type, body, media_metadata, created_at)
+         VALUES ($1, $2, $3, 'game', $4, $5, NOW())
          RETURNING *`,
-        [conversationId, nextSeq, decoded.id, `Started a game of ${gameKey === 'tictactoe' ? 'Tic-Tac-Toe' : gameKey === 'connect4' ? 'Four in a Row' : gameKey === 'rps' ? 'Rock Paper Scissors' : 'Word Guess'}! 🎮`]
+        [
+          conversationId,
+          nextSeq,
+          decoded.id,
+          `Started a duel in ${gMeta.n}! ${gMeta.e}`,
+          JSON.stringify({ game: gameCard }),
+        ]
       );
 
       const senderRes = await query('SELECT display_name as "displayName" FROM users WHERE id = $1', [decoded.id]);
@@ -163,6 +202,7 @@ export const gameRoutes: FastifyPluginAsync = async (fastify) => {
             senderId: row.sender_id,
             type: row.type,
             body: row.body,
+            mediaMetadata: { game: gameCard },
             createdAt: row.created_at,
             sender: { id: decoded.id, displayName: senderRes.rows[0]?.displayName || 'Player' },
             reactions: [],
@@ -174,7 +214,7 @@ export const gameRoutes: FastifyPluginAsync = async (fastify) => {
     return { session, opponent };
   });
 
-  // Get game session
+  // 3. Get Game Session
   fastify.get('/sessions/:id', async (request, reply) => {
     const { id } = request.params as { id: string };
 
@@ -193,7 +233,7 @@ export const gameRoutes: FastifyPluginAsync = async (fastify) => {
 
     const session = res.rows[0];
     let opponent = null;
-    const oppId = session.state?.playerO || session.state?.playerYellow || session.state?.playerOpp;
+    const oppId = session.state?.playerThem || session.state?.playerO || session.state?.playerYellow || session.state?.playerOpp;
     if (oppId) {
       const oppRes = await query(
         `SELECT id, username, display_name as "displayName", bio,
@@ -210,94 +250,130 @@ export const gameRoutes: FastifyPluginAsync = async (fastify) => {
     return { session, opponent };
   });
 
-  // Make move via REST
+  // 4. Make Move in Game Session
   fastify.post('/sessions/:id/move', async (request, reply) => {
     const decoded = request.user as { id: string };
     const { id } = request.params as { id: string };
-    const { move } = request.body as any;
+    const { move, action, who = 'me' } = request.body as any;
 
     const sessionRes = await query('SELECT * FROM game_sessions WHERE id = $1', [id]);
     if (sessionRes.rowCount === 0) {
       return reply.status(404).send({ error: { code: 'NOT_FOUND', message: 'Game session not found' } });
     }
     const session = sessionRes.rows[0];
+    const gid = normalizeGameKey(session.game_key);
 
-    let updatedState = { ...session.state, ...move };
+    let updatedState = { ...session.state };
     let winnerId = session.winner_id;
     let status = session.status;
+    const actArg = action !== undefined ? action : move?.action !== undefined ? move.action : move?.index;
 
-    // 1. TIC-TAC-TOE
-    if (session.game_key === 'tictactoe' && typeof move.index === 'number') {
-      const board: (string | null)[] = session.state.board ? [...session.state.board] : Array(9).fill(null);
-      const currentTurn = session.state.turn || 'X';
-
-      if (!board[move.index]) {
-        board[move.index] = currentTurn;
-        const winningLines = [
-          [0, 1, 2], [3, 4, 5], [6, 7, 8],
-          [0, 3, 6], [1, 4, 7], [2, 5, 8],
-          [0, 4, 8], [2, 4, 6]
-        ];
-        let hasWon = false;
-        for (const [a, b, c] of winningLines) {
-          if (board[a] && board[a] === board[b] && board[a] === board[c]) {
-            hasWon = true;
-            break;
+    // Execute Move across the 7 engines
+    if (gid === 'ttt') {
+      const b = [...(updatedState.b || updatedState.board || Array(9).fill(''))];
+      const i = +actArg;
+      if (!b[i]) {
+        const mark = updatedState.turn === 'O' ? 'O' : 'X';
+        b[i] = mark;
+        updatedState.b = b;
+        updatedState.board = b;
+        const normalizedForTl = b.map((c: string) => c === 'X' ? 'me' : c === 'O' ? 'them' : c);
+        const r = tl(normalizedForTl);
+        const nextTurn = mark === 'X' ? 'O' : 'X';
+        updatedState.turn = nextTurn;
+        if (r) {
+          status = 'completed';
+          winnerId = r === 'draw' ? null : r === 'me' ? session.created_by : (updatedState.playerThem || updatedState.playerO);
+        }
+      }
+    } else if (gid === 'c4') {
+      const b = [...(updatedState.b || updatedState.board || Array(42).fill(''))];
+      const res = c4Engine.act(b, who, actArg);
+      if (res) {
+        updatedState.b = b;
+        updatedState.board = b;
+        updatedState.last = res.last;
+        updatedState.turn = oth(who);
+        if (res.end) {
+          status = 'completed';
+          winnerId = res.end === 'draw' ? null : res.end === 'me' ? session.created_by : updatedState.playerThem;
+        }
+      }
+    } else if (gid === 'checkers') {
+      const res = checkersEngine.act(updatedState, who, String(actArg));
+      if (res) {
+        if (!updatedState.cont) {
+          updatedState.turn = oth(who);
+        }
+        if (res.end) {
+          status = 'completed';
+          winnerId = res.end === 'draw' ? null : res.end === 'me' ? session.created_by : updatedState.playerThem;
+        }
+      }
+    } else if (gid === 'chess') {
+      const whoCol = who === updatedState.first ? (updatedState.w || 'w') : ((updatedState.w || 'w') === 'w' ? 'b' : 'w');
+      const res = chessEngine.act(updatedState, whoCol, String(actArg));
+      if (res) {
+        updatedState.turn = oth(who);
+        if (res.end) {
+          status = 'completed';
+          winnerId = res.end === 'draw' ? null : res.end === whoCol ? session.created_by : updatedState.playerThem;
+        }
+      }
+    } else if (gid === 'rps') {
+      const userChoice = String(actArg).toLowerCase();
+      const oppChoices = ['r', 'p', 's'];
+      const oppChoice = oppChoices[Math.floor(Math.random() * 3)];
+      updatedState.rd = updatedState.rd || [];
+      updatedState.rd.push({ me: userChoice, them: oppChoice });
+      const tally = rpsTally(updatedState.rd);
+      if (tally.me >= 2) {
+        status = 'completed';
+        winnerId = session.created_by;
+      } else if (tally.them >= 2) {
+        status = 'completed';
+        winnerId = updatedState.playerThem;
+      } else if (updatedState.rd.length >= 5) {
+        status = 'completed';
+        winnerId = tally.me > tally.them ? session.created_by : tally.me < tally.them ? updatedState.playerThem : null;
+      }
+    } else if (gid === 'trivia') {
+      if (actArg === 'next') {
+        updatedState.fb = null;
+        updatedState.i++;
+        if (updatedState.i >= 5) {
+          status = 'completed';
+          winnerId = updatedState.score >= 3 ? session.created_by : updatedState.playerThem;
+        }
+      } else if (updatedState.fb == null) {
+        const p = +actArg;
+        const q = updatedState.qs[updatedState.i];
+        if (q && p >= 0 && p < 4) {
+          updatedState.fb = { p };
+          if (p === q.a) {
+            updatedState.score++;
           }
         }
-        if (hasWon) {
-          winnerId = decoded.id;
-          status = 'completed';
-        } else if (board.every(cell => cell !== null)) {
-          status = 'completed';
+      }
+    } else if (gid === 'word') {
+      const w = updatedState.ws[updatedState.i];
+      if (actArg === 'skip') {
+        updatedState.i++;
+        updatedState.msg = 'Skipped';
+      } else if (String(actArg).startsWith('g:')) {
+        const g = String(actArg).slice(2).trim().toUpperCase();
+        if (w && g === w.w) {
+          updatedState.solved++;
+          updatedState.i++;
+          updatedState.msg = 'Correct!';
+        } else {
+          updatedState.msg = 'Not quite, try again';
         }
-
-        const nextTurn = currentTurn === 'X' ? 'O' : 'X';
-        updatedState = { ...session.state, board, turn: nextTurn };
       }
-    }
-
-    // 2. ROCK PAPER SCISSORS
-    if (session.game_key === 'rps' && move.rps) {
-      const choices = ['rock', 'paper', 'scissors'];
-      const userChoice = move.rps.toLowerCase();
-      const oppChoice = choices[Math.floor(Math.random() * choices.length)];
-
-      let roundWinner = 'draw';
-      if (
-        (userChoice === 'rock' && oppChoice === 'scissors') ||
-        (userChoice === 'paper' && oppChoice === 'rock') ||
-        (userChoice === 'scissors' && oppChoice === 'paper')
-      ) {
-        roundWinner = 'user';
-      } else if (userChoice !== oppChoice) {
-        roundWinner = 'opponent';
+      if (updatedState.i >= 5) {
+        status = 'completed';
+        winnerId = updatedState.solved >= 3 ? session.created_by : updatedState.playerThem;
       }
-
-      const prevRounds = session.state.rounds || [];
-      const newRound = { user: userChoice, opp: oppChoice, winner: roundWinner };
-      const allRounds = [...prevRounds, newRound];
-
-      const userScore = allRounds.filter(r => r.winner === 'user').length;
-      const oppScore = allRounds.filter(r => r.winner === 'opponent').length;
-
-      if (userScore >= 2) {
-        winnerId = decoded.id;
-        status = 'completed';
-      } else if (oppScore >= 2) {
-        winnerId = session.state.playerOpp;
-        status = 'completed';
-      } else if (allRounds.length >= 5) {
-        winnerId = userScore > oppScore ? decoded.id : userScore < oppScore ? session.state.playerOpp : null;
-        status = 'completed';
-      }
-
-      updatedState = {
-        ...session.state,
-        rounds: allRounds,
-        userScore,
-        oppScore,
-      };
     }
 
     await query(
@@ -321,11 +397,420 @@ export const gameRoutes: FastifyPluginAsync = async (fastify) => {
       await realtimeGateway.broadcastToConversation(session.conversation_id, eventPayload);
     }
 
-    // Trigger Bot AI move if game is still in progress
-    if (status === 'in_progress') {
+    // Trigger Bot AI move if game is still in progress and it's their turn
+    if (status === 'in_progress' && (updatedState.turn === 'them' || updatedState.turn === 'O' || updatedState.turn === 'yellow')) {
       botService.handleGameMove(id, decoded.id);
     }
 
     return { session: { ...session, state: updatedState, winnerId, status } };
+  });
+
+  // 5. In-Chat Invites: Create challenge in conversation
+  fastify.post('/invites', async (request, reply) => {
+    const decoded = request.user as { id: string };
+    const { conversationId, gameKey } = request.body as { conversationId: string; gameKey: string };
+    const gid = normalizeGameKey(gameKey);
+
+    // Verify conversation membership
+    const memberCheck = await query(
+      'SELECT conversation_id FROM conversation_members WHERE conversation_id = $1 AND user_id = $2',
+      [conversationId, decoded.id]
+    );
+    if (memberCheck.rowCount === 0) {
+      return reply.status(403).send({ error: { code: 'FORBIDDEN', message: 'Not a member of this chat' } });
+    }
+
+    // Get opponent info
+    const otherMember = await query(
+      `SELECT u.id, u.display_name as "displayName", u.is_bot as "isBot"
+       FROM conversation_members cm
+       JOIN users u ON cm.user_id = u.id
+       WHERE cm.conversation_id = $1 AND u.id != $2 LIMIT 1`,
+      [conversationId, decoded.id]
+    );
+
+    const oppName = otherMember.rows[0]?.displayName || 'Opponent';
+    const isBot = Boolean(otherMember.rows[0]?.isBot);
+    const oppId = otherMember.rows[0]?.id;
+
+    const g = GM[gid] || { n: 'Game', e: '🎮' };
+    const cardData = {
+      gid,
+      st: 'invite' as const,
+      by: 'me',
+      turn: 'me',
+      t0: Date.now(),
+      who: ['You', oppName],
+      nm: oppName,
+    };
+
+    const seqRes = await query(
+      'UPDATE conversations SET last_seq = last_seq + 1, last_message_at = NOW() WHERE id = $1 RETURNING last_seq',
+      [conversationId]
+    );
+    const nextSeq = seqRes.rows[0].last_seq;
+
+    const insertMsg = await query(
+      `INSERT INTO messages (conversation_id, seq, sender_id, type, body, media_metadata, created_at)
+       VALUES ($1, $2, $3, 'game', $4, $5, NOW())
+       RETURNING *`,
+      [
+        conversationId,
+        nextSeq,
+        decoded.id,
+        `Challenged to ${g.n}! ${g.e}`,
+        JSON.stringify({ game: cardData }),
+      ]
+    );
+
+    const msgRow = insertMsg.rows[0];
+    const senderRes = await query('SELECT display_name as "displayName" FROM users WHERE id = $1', [decoded.id]);
+
+    const createdMsg = {
+      id: msgRow.id,
+      conversationId: msgRow.conversation_id,
+      seq: msgRow.seq,
+      senderId: msgRow.sender_id,
+      type: 'game' as const,
+      body: msgRow.body,
+      mediaMetadata: { game: cardData },
+      createdAt: msgRow.created_at,
+      sender: { id: decoded.id, displayName: senderRes.rows[0]?.displayName || 'Player' },
+      reactions: [],
+    };
+
+    await realtimeGateway.broadcastToConversation(conversationId, {
+      t: 'message.new',
+      d: { conversationId, message: createdMsg },
+    });
+
+    // If opponent is a bot, auto-accept challenge after 2.5-4s matching standalone Lines 4416-4423!
+    if (isBot && oppId) {
+      setTimeout(async () => {
+        try {
+          // Initialize game session
+          let initialState: Record<string, any> = {};
+          if (gid === 'ttt') {
+            initialState = { b: ['', '', '', '', '', '', '', '', ''], turn: 'me', playerMe: decoded.id, playerThem: oppId };
+          } else if (gid === 'c4') {
+            initialState = { b: Array(42).fill(''), last: -1, turn: 'me', playerMe: decoded.id, playerThem: oppId };
+          } else if (gid === 'checkers') {
+            initialState = { ...checkersEngine.init(), turn: 'me', playerMe: decoded.id, playerThem: oppId };
+          } else if (gid === 'chess') {
+            initialState = { ...chessEngine.init('w'), turn: 'me', first: 'me', playerMe: decoded.id, playerThem: oppId };
+          } else if (gid === 'rps') {
+            initialState = { rd: [], playerMe: decoded.id, playerThem: oppId };
+          } else if (gid === 'trivia') {
+            initialState = { ...initTriviaRound(), playerMe: decoded.id, playerThem: oppId };
+          } else if (gid === 'word') {
+            initialState = { ...initWordRound(), playerMe: decoded.id, playerThem: oppId };
+          }
+
+          const sessRes = await query(
+            `INSERT INTO game_sessions (game_key, conversation_id, state, created_by, status)
+             VALUES ($1, $2, $3, $4, 'in_progress')
+             RETURNING id`,
+            [gid, conversationId, JSON.stringify(initialState), decoded.id]
+          );
+
+          const updatedCard = {
+            ...cardData,
+            st: 'playing' as const,
+            sessionId: sessRes.rows[0].id,
+          };
+
+          const updMsg = await query(
+            `UPDATE messages SET media_metadata = $1 WHERE id = $2 RETURNING *`,
+            [JSON.stringify({ game: updatedCard }), msgRow.id]
+          );
+
+          const updRow = updMsg.rows[0];
+          await realtimeGateway.broadcastToConversation(conversationId, {
+            t: 'message.updated',
+            d: {
+              conversationId,
+              message: {
+                id: updRow.id,
+                conversationId: updRow.conversation_id,
+                seq: updRow.seq,
+                senderId: updRow.sender_id,
+                type: 'game' as const,
+                body: updRow.body,
+                mediaMetadata: { game: updatedCard },
+                createdAt: updRow.created_at,
+                reactions: [],
+              },
+            },
+          });
+        } catch (err) {
+          console.error('[GameInvite] Auto-accept bot error:', err);
+        }
+      }, 2500 + Math.random() * 1500);
+    }
+
+    return { message: createdMsg };
+  });
+
+  // 6. In-Chat Invites: Accept or Decline
+  fastify.post('/invites/:messageId/respond', async (request, reply) => {
+    const decoded = request.user as { id: string };
+    const { messageId } = request.params as { messageId: string };
+    const { action } = request.body as { action: 'accept' | 'decline' | 'cancel' };
+
+    const msgRes = await query('SELECT * FROM messages WHERE id = $1', [messageId]);
+    if (msgRes.rowCount === 0) {
+      return reply.status(404).send({ error: { code: 'NOT_FOUND', message: 'Message not found' } });
+    }
+    const msg = msgRes.rows[0];
+    const cardData = msg.media_metadata?.game;
+    if (!cardData) {
+      return reply.status(400).send({ error: { code: 'BAD_REQUEST', message: 'Not a game challenge message' } });
+    }
+
+    const gid = normalizeGameKey(cardData.gid);
+
+    if (action === 'accept') {
+      let initialState: Record<string, any> = {};
+      if (gid === 'ttt') {
+        initialState = { b: ['', '', '', '', '', '', '', '', ''], turn: 'me', playerMe: msg.sender_id, playerThem: decoded.id };
+      } else if (gid === 'c4') {
+        initialState = { b: Array(42).fill(''), last: -1, turn: 'me', playerMe: msg.sender_id, playerThem: decoded.id };
+      } else if (gid === 'checkers') {
+        initialState = { ...checkersEngine.init(), turn: 'me', playerMe: msg.sender_id, playerThem: decoded.id };
+      } else if (gid === 'chess') {
+        initialState = { ...chessEngine.init('w'), turn: 'me', first: 'me', playerMe: msg.sender_id, playerThem: decoded.id };
+      } else if (gid === 'rps') {
+        initialState = { rd: [], playerMe: msg.sender_id, playerThem: decoded.id };
+      } else if (gid === 'trivia') {
+        initialState = { ...initTriviaRound(), playerMe: msg.sender_id, playerThem: decoded.id };
+      } else if (gid === 'word') {
+        initialState = { ...initWordRound(), playerMe: msg.sender_id, playerThem: decoded.id };
+      }
+
+      const sessRes = await query(
+        `INSERT INTO game_sessions (game_key, conversation_id, state, created_by, status)
+         VALUES ($1, $2, $3, $4, 'in_progress')
+         RETURNING id`,
+        [gid, msg.conversation_id, JSON.stringify(initialState), msg.sender_id]
+      );
+
+      const updatedCard = {
+        ...cardData,
+        st: 'playing' as const,
+        sessionId: sessRes.rows[0].id,
+      };
+
+      const updMsg = await query(
+        `UPDATE messages SET media_metadata = $1 WHERE id = $2 RETURNING *`,
+        [JSON.stringify({ game: updatedCard }), messageId]
+      );
+      const updRow = updMsg.rows[0];
+
+      await realtimeGateway.broadcastToConversation(msg.conversation_id, {
+        t: 'message.updated',
+        d: {
+          conversationId: msg.conversation_id,
+          message: {
+            id: updRow.id,
+            conversationId: updRow.conversation_id,
+            seq: updRow.seq,
+            senderId: updRow.sender_id,
+            type: 'game' as const,
+            body: updRow.body,
+            mediaMetadata: { game: updatedCard },
+            createdAt: updRow.created_at,
+            reactions: [],
+          },
+        },
+      });
+
+      return { success: true, sessionId: sessRes.rows[0].id };
+    } else {
+      const updatedCard = {
+        ...cardData,
+        st: action === 'cancel' ? ('cancelled' as const) : ('declined' as const),
+      };
+
+      const updMsg = await query(
+        `UPDATE messages SET media_metadata = $1 WHERE id = $2 RETURNING *`,
+        [JSON.stringify({ game: updatedCard }), messageId]
+      );
+      const updRow = updMsg.rows[0];
+
+      await realtimeGateway.broadcastToConversation(msg.conversation_id, {
+        t: 'message.updated',
+        d: {
+          conversationId: msg.conversation_id,
+          message: {
+            id: updRow.id,
+            conversationId: updRow.conversation_id,
+            seq: updRow.seq,
+            senderId: updRow.sender_id,
+            type: 'game' as const,
+            body: updRow.body,
+            mediaMetadata: { game: updatedCard },
+            createdAt: updRow.created_at,
+            reactions: [],
+          },
+        },
+      });
+
+      return { success: true };
+    }
+  });
+
+  // 7. LFG Posts: Get Open & Mine
+  fastify.get('/lfg', async (request) => {
+    const decoded = request.user as { id: string };
+
+    const res = await query(
+      `SELECT p.id, p.by_user_id as "by", p.game_key as "gameKey", p.mode,
+              p.players_needed as "playersNeeded", p.joined, p.note, p.status,
+              p.match_session_id as "matchSessionId", p.conversation_id as "conversationId",
+              p.message_id as "messageId", p.created_at as "createdAt",
+              u.username, u.display_name as "displayName", u.avatar_url as "avatarUrl",
+              u.avatar_kind as "avatarKind"
+       FROM lfg_posts p
+       JOIN users u ON p.by_user_id = u.id
+       WHERE p.status = 'open' OR (p.by_user_id = $1 AND p.created_at > NOW() - INTERVAL '24 hours')
+       ORDER BY p.created_at DESC`,
+      [decoded.id]
+    );
+
+    const posts = res.rows.map((row) => ({
+      id: row.id,
+      by: row.by,
+      gameKey: row.gameKey,
+      mode: row.mode,
+      playersNeeded: row.playersNeeded,
+      joined: row.joined || [],
+      note: row.note,
+      status: row.status,
+      matchSessionId: row.matchSessionId,
+      conversationId: row.conversationId,
+      messageId: row.messageId,
+      createdAt: row.createdAt,
+      byUser: {
+        id: row.by,
+        username: row.username,
+        displayName: row.displayName,
+        avatarUrl: row.avatarUrl,
+        avatarKind: row.avatarKind,
+      },
+    }));
+
+    return { posts };
+  });
+
+  // 8. LFG Posts: Create Post
+  fastify.post('/lfg', async (request) => {
+    const decoded = request.user as { id: string };
+    const { gameKey = 'chess', mode = '1v1', playersNeeded = 1, note } = request.body as any;
+    const gid = normalizeGameKey(gameKey);
+
+    const res = await query(
+      `INSERT INTO lfg_posts (by_user_id, game_key, mode, players_needed, joined, note, status)
+       VALUES ($1, $2, $3, $4, '[]'::jsonb, $5, 'open')
+       RETURNING id, by_user_id as "by", game_key as "gameKey", mode, players_needed as "playersNeeded",
+                 joined, note, status, created_at as "createdAt"`,
+      [decoded.id, gid, mode, mode === '1v1' ? 1 : Math.max(2, playersNeeded), note ? String(note).trim() : null]
+    );
+
+    const post = res.rows[0];
+    return { post };
+  });
+
+  // 9. LFG Posts: Join Post
+  fastify.post('/lfg/:id/join', async (request, reply) => {
+    const decoded = request.user as { id: string };
+    const { id } = request.params as { id: string };
+
+    const postRes = await query('SELECT * FROM lfg_posts WHERE id = $1', [id]);
+    if (postRes.rowCount === 0) {
+      return reply.status(404).send({ error: { code: 'NOT_FOUND', message: 'LFG post not found' } });
+    }
+    const post = postRes.rows[0];
+    if (post.status !== 'open') {
+      return reply.status(400).send({ error: { code: 'BAD_REQUEST', message: 'Post is no longer open' } });
+    }
+
+    const userRes = await query('SELECT display_name as "displayName" FROM users WHERE id = $1', [decoded.id]);
+    const userName = userRes.rows[0]?.displayName || 'Player';
+
+    const currentJoined = post.joined || [];
+    if (currentJoined.some((j: any) => j.id === decoded.id)) {
+      return { success: true, message: 'Already joined', post };
+    }
+
+    const updatedJoined = [...currentJoined, { id: decoded.id, name: userName }];
+    const gid = normalizeGameKey(post.game_key);
+    let newStatus = post.status;
+    let matchSessionId = post.match_session_id;
+
+    // If needed players met, launch match session!
+    if (updatedJoined.length >= post.players_needed) {
+      newStatus = 'matched';
+
+      let initialState: Record<string, any> = {};
+      if (gid === 'ttt') {
+        initialState = { b: ['', '', '', '', '', '', '', '', ''], turn: 'me', playerMe: post.by_user_id, playerThem: decoded.id };
+      } else if (gid === 'c4') {
+        initialState = { b: Array(42).fill(''), last: -1, turn: 'me', playerMe: post.by_user_id, playerThem: decoded.id };
+      } else if (gid === 'checkers') {
+        initialState = { ...checkersEngine.init(), turn: 'me', playerMe: post.by_user_id, playerThem: decoded.id };
+      } else if (gid === 'chess') {
+        initialState = { ...chessEngine.init('w'), turn: 'me', first: 'me', playerMe: post.by_user_id, playerThem: decoded.id };
+      } else if (gid === 'rps') {
+        initialState = { rd: [], playerMe: post.by_user_id, playerThem: decoded.id };
+      } else if (gid === 'trivia') {
+        initialState = { ...initTriviaRound(), playerMe: post.by_user_id, playerThem: decoded.id };
+      } else if (gid === 'word') {
+        initialState = { ...initWordRound(), playerMe: post.by_user_id, playerThem: decoded.id };
+      }
+
+      const sessRes = await query(
+        `INSERT INTO game_sessions (game_key, state, created_by, status)
+         VALUES ($1, $2, $3, 'in_progress')
+         RETURNING id`,
+        [gid, JSON.stringify(initialState), post.by_user_id]
+      );
+      matchSessionId = sessRes.rows[0].id;
+    }
+
+    await query(
+      `UPDATE lfg_posts
+       SET joined = $2, status = $3, match_session_id = $4, updated_at = NOW()
+       WHERE id = $1`,
+      [id, JSON.stringify(updatedJoined), newStatus, matchSessionId]
+    );
+
+    return {
+      success: true,
+      post: {
+        ...post,
+        joined: updatedJoined,
+        status: newStatus,
+        matchSessionId,
+      },
+    };
+  });
+
+  // 10. LFG Posts: Close Post
+  fastify.post('/lfg/:id/close', async (request, reply) => {
+    const decoded = request.user as { id: string };
+    const { id } = request.params as { id: string };
+
+    const updateRes = await query(
+      `UPDATE lfg_posts SET status = 'closed', updated_at = NOW()
+       WHERE id = $1 AND by_user_id = $2
+       RETURNING id`,
+      [id, decoded.id]
+    );
+
+    if (updateRes.rowCount === 0) {
+      return reply.status(404).send({ error: { code: 'NOT_FOUND', message: 'Post not found or not owner' } });
+    }
+
+    return { success: true };
   });
 };

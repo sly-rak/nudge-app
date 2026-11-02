@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Conversation, Message, Room } from '@nudge/shared';
+import { Conversation, Message, Room, GM, GORDER, normalizeGameKey } from '@nudge/shared';
 import { useAuth } from '../../context/AuthContext.js';
 import { usePresence } from '../../context/PresenceContext.js';
 import { api } from '../../services/api.js';
@@ -221,6 +221,7 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
   // Temporary Group Expiration State
   const [expiryOption, setExpiryOption] = useState<'none' | '1h' | '24h' | '7d' | '30d' | 'custom'>('none');
   const [expiryCustomDate, setExpiryCustomDate] = useState('');
+  const [showGamePickerModal, setShowGamePickerModal] = useState(false);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [showEmojiPanel, setShowEmojiPanel] = useState(false);
   const [activePanelTab, setActivePanelTab] = useState<'emoji' | 'gif' | 'sticker'>('emoji');
@@ -1223,7 +1224,7 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
           </button>
 
           <button
-            onClick={() => onLaunchGame('tictactoe', conversation.id)}
+            onClick={() => setShowGamePickerModal(true)}
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -1683,8 +1684,123 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
                   </div>
                 )}
 
+                {/* In-Chat Duel Card (.gcard & .gbtn) */}
+                {(msg.type === 'game' || msg.mediaMetadata?.game) && (() => {
+                  const m = msg.mediaMetadata?.game || (msg as any).game;
+                  const gid = normalizeGameKey(m?.gid || 'ttt');
+                  const g = GM[gid] || { n: 'Game', e: '🎮', d: '' };
+                  const isSender = (msg.senderId || (msg as any).sender_id) === user?.id;
+                  const isGrp = conversation.type === 'group';
+                  const oppDisplayName = isGrp ? 'everyone' : (conversation.title || 'Friend');
+
+                  let statusText = 'Game match';
+                  if (m?.st === 'invite') {
+                    statusText = isSender ? (isGrp ? 'Waiting for players' : `Waiting for ${oppDisplayName}`) : (isGrp ? 'Group challenge' : `${oppDisplayName} challenged you`);
+                  } else if (m?.st === 'declined') {
+                    statusText = 'Declined';
+                  } else if (m?.st === 'cancelled') {
+                    statusText = 'Cancelled';
+                  } else if (m?.st === 'done') {
+                    statusText = m.res === 'win' ? 'You won' : m.res === 'loss' ? `${oppDisplayName} won` : 'Draw';
+                  } else if (m?.st === 'playing') {
+                    statusText = m.turn === 'me' ? 'Your turn' : `${oppDisplayName} is thinking…`;
+                  }
+
+                  return (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 210 }}>
+                      <div className="gcard">
+                        <span className="gic" style={{ fontSize: 22 }}>{g.e}</span>
+                        <span className="gtx">
+                          <b style={{ color: isMe ? '#fff' : 'var(--ink)' }}>{g.n}</b>
+                          <small style={{ color: isMe ? 'rgba(255,255,255,0.75)' : 'var(--muted)' }}>{statusText}</small>
+                        </span>
+                      </div>
+                      <div className="gbtn">
+                        {m?.st === 'invite' && (
+                          isSender ? (
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                try {
+                                  await api.respondGameInvite(msg.id, 'cancel');
+                                } catch (err) {
+                                  console.error('Cancel game invite error:', err);
+                                }
+                              }}
+                            >
+                              Cancel
+                            </button>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                className="pri"
+                                onClick={async () => {
+                                  try {
+                                    await api.respondGameInvite(msg.id, 'accept');
+                                    onLaunchGame(gid, conversation.id);
+                                  } catch (err) {
+                                    console.error('Accept game invite error:', err);
+                                  }
+                                }}
+                              >
+                                Accept
+                              </button>
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  try {
+                                    await api.respondGameInvite(msg.id, 'decline');
+                                  } catch (err) {
+                                    console.error('Decline game invite error:', err);
+                                  }
+                                }}
+                              >
+                                Decline
+                              </button>
+                            </>
+                          )
+                        )}
+                        {m?.st === 'playing' && (
+                          <button
+                            type="button"
+                            className="pri"
+                            onClick={() => onLaunchGame(gid, conversation.id)}
+                          >
+                            {m.turn === 'me' ? 'Play' : 'Open'}
+                          </button>
+                        )}
+                        {m?.st === 'done' && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => onLaunchGame(gid, conversation.id)}
+                            >
+                              View
+                            </button>
+                            <button
+                              type="button"
+                              className="pri"
+                              onClick={async () => {
+                                try {
+                                  await api.sendGameInvite(conversation.id, gid);
+                                  playTone('pop');
+                                } catch (err) {
+                                  console.error('Rematch error:', err);
+                                }
+                              }}
+                            >
+                              Rematch
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 {/* Text Message Content with highlighted search matching */}
-                {msg.type !== 'voice' && (
+                {msg.type !== 'voice' && msg.type !== 'game' && !msg.mediaMetadata?.game && (
                   <div style={{ fontSize: 14, lineHeight: 1.4, wordBreak: 'break-word' }}>
                     {searchQuery && msg.body.toLowerCase().includes(searchQuery.toLowerCase()) ? (
                       (() => {
@@ -2003,7 +2119,7 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
           <button
             onClick={() => {
               setShowAttachMenu(false);
-              onLaunchGame('tictactoe', conversation.id);
+              setShowGamePickerModal(true);
             }}
           >
             <div className="ai2" style={{ backgroundColor: '#0E8A8F' }}>
@@ -3359,6 +3475,87 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
                   {conversation.archivedAt ? 'Reopen' : 'Save'}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Game Picker Modal (Standalone Lines 4443-4449) */}
+      {showGamePickerModal && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0,0,0,0.5)',
+            zIndex: 9999,
+            display: 'grid',
+            placeItems: 'center',
+            padding: 16,
+          }}
+          onClick={() => setShowGamePickerModal(false)}
+        >
+          <div
+            className="mdlg"
+            style={{
+              backgroundColor: 'var(--panel)',
+              borderRadius: 20,
+              padding: 24,
+              width: '100%',
+              maxWidth: 420,
+              border: '1px solid var(--line)',
+              boxShadow: '0 20px 40px rgba(0,0,0,0.3)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+              <div>
+                <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0, color: 'var(--ink)' }}>
+                  Challenge {conversation.title || 'Friend'}
+                </h2>
+                <p style={{ margin: '4px 0 0', fontSize: 13, color: 'var(--muted)' }}>
+                  Pick a game. The invite appears in the chat.
+                </p>
+              </div>
+              <button
+                onClick={() => setShowGamePickerModal(false)}
+                style={{ width: 32, height: 32, borderRadius: '50%', border: 'none', background: 'var(--hover)', display: 'grid', placeItems: 'center', cursor: 'pointer', color: 'var(--muted)' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="gpick">
+              {GORDER.filter((k) => conversation.type !== 'group' || GM[k].par).map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={async () => {
+                    setShowGamePickerModal(false);
+                    try {
+                      await api.sendGameInvite(conversation.id, k);
+                      playTone('pop');
+                    } catch (err) {
+                      console.error('Failed to send challenge:', err);
+                    }
+                  }}
+                >
+                  <span className="gic" style={{ fontSize: 20 }}>{GM[k].e}</span>
+                  <span>
+                    <b>{GM[k].n}</b>
+                    <small>{GM[k].d}</small>
+                  </span>
+                </button>
+              ))}
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+              <button
+                type="button"
+                onClick={() => setShowGamePickerModal(false)}
+                style={{ padding: '8px 16px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--panel)', color: 'var(--ink)', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}
+              >
+                Cancel
+              </button>
             </div>
           </div>
         </div>

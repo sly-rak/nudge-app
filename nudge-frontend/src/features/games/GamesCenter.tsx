@@ -3,16 +3,58 @@ import { useAuth } from '../../context/AuthContext.js';
 import { usePresence } from '../../context/PresenceContext.js';
 import { wsClient } from '../../services/websocket.js';
 import { api } from '../../services/api.js';
-import { Gamepad2, RotateCcw, X, Award, Sparkles, ChevronDown, Users, Flame, Shield, Trophy } from 'lucide-react';
+import { playTone } from '../../services/soundEffects.js';
+import {
+  GM,
+  GORDER,
+  normalizeGameKey,
+  tttEngine,
+  tl,
+  c4Engine,
+  c4w,
+  c4drop,
+  checkersEngine,
+  ckInit,
+  ckMoves,
+  chessEngine,
+  chInit,
+  chLegal,
+  chCheck,
+  chKing,
+  CHG,
+  initTriviaRound,
+  initWordRound,
+  rpsBeats,
+  rpsTally,
+  RPSE,
+  oth,
+} from '@nudge/shared';
+import {
+  Gamepad2,
+  ChevronLeft,
+  X,
+  Plus,
+  Users,
+  Trophy,
+  History,
+  Swords,
+  Radio,
+  Search,
+  CheckCircle2,
+  AlertCircle,
+  HelpCircle,
+} from 'lucide-react';
+import { Avatar } from '../../components/Avatar.js';
 
 interface GamesCenterProps {
   onClose?: () => void;
   conversationId?: string;
   isEmbedded?: boolean;
   initialOpponent?: OpponentProfile;
+  initialSessionId?: string;
 }
 
-interface OpponentProfile {
+export interface OpponentProfile {
   id: string;
   username: string;
   displayName: string;
@@ -91,60 +133,79 @@ const DEFAULT_BOTS: OpponentProfile[] = [
   },
 ];
 
-export const GamesCenter: React.FC<GamesCenterProps> = ({ onClose, conversationId, isEmbedded = false, initialOpponent }) => {
+type GCView = 'home' | 'find' | 'create' | 'mine' | 'chal' | 'active' | 'hist' | 'play';
+
+export const GamesCenter: React.FC<GamesCenterProps> = ({
+  onClose,
+  conversationId,
+  isEmbedded = false,
+  initialOpponent,
+  initialSessionId,
+}) => {
   const { user } = useAuth();
   const { isOnline, getStatusLabel } = usePresence();
-  const [selectedGame, setSelectedGame] = useState<'tictactoe' | 'c4' | 'rps' | 'wordguess'>('tictactoe');
 
-  // Opponent management
-  const [availableOpponents, setAvailableOpponents] = useState<OpponentProfile[]>(DEFAULT_BOTS);
+  // Navigation state (matching standalone gcV)
+  const [view, setView] = useState<GCView>(initialSessionId ? 'play' : 'home');
+  const [selectedGameKey, setSelectedGameKey] = useState<string>('c4');
+
+  // Opponents & Chat Contacts
+  const [opponents, setOpponents] = useState<OpponentProfile[]>(DEFAULT_BOTS);
   const [currentOpponent, setCurrentOpponent] = useState<OpponentProfile>(initialOpponent || DEFAULT_BOTS[0]);
-  const [showOpponentPicker, setShowOpponentPicker] = useState(false);
-  const [opponentBanter, setOpponentBanter] = useState<string>('Ready for a duel? Make your move!');
+  const [selectedTargetUser, setSelectedTargetUser] = useState<string | null>(null);
 
-  // Match statistics (W / L / D against current opponent)
-  const [scores, setScores] = useState<Record<string, { w: number; l: number; d: number }>>({});
+  // Active game session state
+  const [sessionId, setSessionId] = useState<string | null>(initialSessionId || null);
+  const [gameState, setGameState] = useState<Record<string, any>>({});
+  const [gameStatus, setGameStatus] = useState<string>('in_progress');
+  const [gameWinnerId, setGameWinnerId] = useState<string | null>(null);
+  const [isBotThinking, setIsBotThinking] = useState(false);
+  const [selectedBoardSquare, setSelectedBoardSquare] = useState<number | null>(null);
+  const [wordGuessInput, setWordGuessInput] = useState('');
 
-  // Sync initialOpponent when passed or changed from Chat
+  // LFG Posts & Invites
+  const [lfgPosts, setLfgPosts] = useState<any[]>([]);
+  const [showLfgModal, setShowLfgModal] = useState(false);
+  const [lfgForm, setLfgForm] = useState({ gid: 'chess', mode: '1v1', need: 1, note: '' });
+  const [floatingNotification, setFloatingNotification] = useState<{
+    text: string;
+    actionLabel?: string;
+    onAction?: () => void;
+  } | null>(null);
+
+  // Challenges, Matches & History
+  const [challenges, setChallenges] = useState<any[]>([]);
+  const [activeMatches, setActiveMatches] = useState<any[]>([]);
+  const [gameHistory, setGameHistory] = useState<any[]>([]);
+  const [historyFilter, setHistoryFilter] = useState<'all' | 'win' | 'loss' | 'draw'>('all');
+
+  // Stats per game (saved in localStorage and updated on game complete)
+  const [gameStats, setGameStats] = useState<Record<string, { w: number; l: number; d: number }>>(() => {
+    try {
+      const s = localStorage.getItem('nudge_game_stats_v1');
+      return s ? JSON.parse(s) : {};
+    } catch {
+      return {};
+    }
+  });
+
+  // Sync initialOpponent
   useEffect(() => {
     if (initialOpponent) {
       setCurrentOpponent(initialOpponent);
     }
-  }, [initialOpponent?.id, initialOpponent?.username]);
-
-  // Tic-Tac-Toe state
-  const [board, setBoard] = useState<(string | null)[]>(Array(9).fill(null));
-  const [turn, setTurn] = useState<'X' | 'O'>('X');
-  const [winner, setWinner] = useState<string | null>(null);
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [isBotThinking, setIsBotThinking] = useState(false);
-
-  // Connect 4 state
-  const [c4Board, setC4Board] = useState<(string | null)[]>(Array(42).fill(null)); // 7 cols x 6 rows
-  const [c4Turn, setC4Turn] = useState<'red' | 'yellow'>('red');
-  const [c4Winner, setC4Winner] = useState<string | null>(null);
-
-  // Rock Paper Scissors state
-  const [rpsRounds, setRpsRounds] = useState<{ user: string; opp: string; winner: string }[]>([]);
-  const [rpsStatus, setRpsStatus] = useState<string | null>(null);
-
-  // Word Guess state
-  const [wordGuesses, setWordGuesses] = useState<string[]>([]);
-  const [currentGuess, setCurrentGuess] = useState('');
-  const [targetWord] = useState('NUDGE');
-  const [wordStatus, setWordStatus] = useState<'playing' | 'won' | 'lost'>('playing');
+  }, [initialOpponent?.id]);
 
   // Load opponents from server
   useEffect(() => {
     api.searchUsers('')
       .then((res) => {
         if (res.users && res.users.length > 0) {
-          const bots = res.users.filter((u: any) => u.isBot || u.id !== user?.id);
-          if (bots.length > 0) {
-            setAvailableOpponents(bots);
-            // Only overwrite if NO initialOpponent was passed
+          const list = res.users.filter((u: any) => u.id !== user?.id);
+          if (list.length > 0) {
+            setOpponents(list);
             if (!initialOpponent) {
-              const tola = bots.find((b: any) => b.username === 'tola') || bots[0];
+              const tola = list.find((b: any) => b.username === 'tola') || list[0];
               setCurrentOpponent(tola);
             }
           }
@@ -153,1278 +214,1275 @@ export const GamesCenter: React.FC<GamesCenterProps> = ({ onClose, conversationI
       .catch(() => {});
   }, [user, initialOpponent]);
 
-  // Load or create game session when selectedGame or currentOpponent changes
-  useEffect(() => {
-    setBoard(Array(9).fill(null));
-    setC4Board(Array(42).fill(null));
-    setRpsRounds([]);
-    setRpsStatus(null);
-    setTurn('X');
-    setC4Turn('red');
-    setWinner(null);
-    setC4Winner(null);
-    setIsBotThinking(false);
-
-    // Initial greeting banter based on persona
-    const greetings: Record<string, string> = {
-      tola: "Let's see if your skills match your mouth! Game on ⚽🎮",
-      mum: "Come and play with your mother, my dear! Remember to sit up straight ❤️",
-      chidi: "Minimax decision tree loaded. Let's see your move logic 💻",
-      amaka: "Quick study break match! Let's make it count 📚",
-      seyi: "Big bro always wins. Ready to get schooled? 😂",
-      jide: "Focus and reflexes! Lock in 🏋️‍♂️",
-      dami: "Let's reboot the creative juices with a duel! ✨",
-    };
-    setOpponentBanter(greetings[currentOpponent.username.toLowerCase()] || `Ready to duel! Make your move.`);
-
-    // Initialize session with backend
-    const backendKey = selectedGame === 'c4' ? 'connect4' : selectedGame;
-    api.createGameSession(backendKey, conversationId, currentOpponent.id)
+  // Load LFG posts
+  const loadLFG = () => {
+    api.getLFGPosts()
       .then((res) => {
-        setSessionId(res.session.id);
-        if (res.session.state?.board) {
-          setBoard(res.session.state.board);
-          setTurn(res.session.state.turn || 'X');
-        }
+        if (res.posts) setLfgPosts(res.posts);
       })
-      .catch((err) => console.error('Failed to init game session:', err));
+      .catch(() => {});
+  };
 
-    const unsub = wsClient.on('game.state', (data: any) => {
-      if (data.state?.board && selectedGame === 'tictactoe') {
-        setBoard(data.state.board);
-        setTurn(data.state.turn || 'X');
-        setIsBotThinking(false);
+  useEffect(() => {
+    loadLFG();
+  }, []);
+
+  // Save stats to localStorage
+  const recordResult = (gid: string, res: 'win' | 'loss' | 'draw') => {
+    setGameStats((prev) => {
+      const cur = prev[gid] || { w: 0, l: 0, d: 0 };
+      const updated = {
+        ...prev,
+        [gid]: {
+          w: cur.w + (res === 'win' ? 1 : 0),
+          l: cur.l + (res === 'loss' ? 1 : 0),
+          d: cur.d + (res === 'draw' ? 1 : 0),
+        },
+      };
+      try {
+        localStorage.setItem('nudge_game_stats_v1', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+
+    setGameHistory((prev) => [
+      {
+        id: 'hist_' + Date.now(),
+        gid,
+        res,
+        opponentName: currentOpponent.displayName,
+        time: Date.now(),
+      },
+      ...prev,
+    ]);
+  };
+
+  // Launch a game session
+  const startMatch = async (gid: string, opp: OpponentProfile) => {
+    setSelectedGameKey(gid);
+    setCurrentOpponent(opp);
+    setSelectedBoardSquare(null);
+    setWordGuessInput('');
+    setIsBotThinking(false);
+    setView('play');
+
+    try {
+      const res = await api.createGameSession(gid, conversationId, opp.id);
+      setSessionId(res.session.id);
+      setGameState(res.session.state || {});
+      setGameStatus(res.session.status || 'in_progress');
+      setGameWinnerId(res.session.winnerId || null);
+      playTone('bop');
+    } catch (err) {
+      console.error('Failed to create match session:', err);
+    }
+  };
+
+  // Open existing game session
+  const openSession = async (sessId: string, gid: string, oppName: string) => {
+    setSelectedGameKey(gid);
+    setSelectedBoardSquare(null);
+    setWordGuessInput('');
+    setIsBotThinking(false);
+    setSessionId(sessId);
+    setView('play');
+
+    try {
+      const res = await api.getGameSession(sessId);
+      setGameState(res.session.state || {});
+      setGameStatus(res.session.status || 'in_progress');
+      setGameWinnerId(res.session.winnerId || null);
+      if (res.opponent) {
+        setCurrentOpponent(res.opponent);
       }
-      if (data.winnerId) {
-        const isUser = data.winnerId === user?.id;
-        setWinner(isUser ? 'You' : currentOpponent.displayName);
-        recordResult(isUser ? 'w' : 'l');
-        handleGameEndBanter(isUser ? 'loss' : 'win');
-      } else if (data.status === 'completed') {
-        setWinner('Draw');
-        recordResult('d');
-        handleGameEndBanter('draw');
+    } catch (err) {
+      console.error('Failed to fetch game session:', err);
+    }
+  };
+
+  // WebSocket game.state subscription
+  useEffect(() => {
+    const unsub = wsClient.on('game.state', (data: any) => {
+      if (sessionId && data.sessionId === sessionId) {
+        setGameState(data.state);
+        setGameStatus(data.status);
+        setGameWinnerId(data.winnerId);
+        setIsBotThinking(false);
+
+        if (data.status === 'completed') {
+          const isUser = data.winnerId === user?.id;
+          const res = data.winnerId ? (isUser ? 'win' : 'loss') : 'draw';
+          playTone(isUser ? 'chime' : 'drop');
+          recordResult(selectedGameKey, res);
+        } else {
+          playTone('pop');
+        }
       }
     });
 
     return () => unsub();
-  }, [selectedGame, currentOpponent, conversationId, user]);
+  }, [sessionId, user, selectedGameKey]);
 
-  const recordResult = (res: 'w' | 'l' | 'd') => {
-    setScores((prev) => {
-      const oppKey = currentOpponent.username.toLowerCase();
-      const cur = prev[oppKey] || { w: 0, l: 0, d: 0 };
-      return {
-        ...prev,
-        [oppKey]: {
-          w: cur.w + (res === 'w' ? 1 : 0),
-          l: cur.l + (res === 'l' ? 1 : 0),
-          d: cur.d + (res === 'd' ? 1 : 0),
-        },
-      };
-    });
-  };
+  // Make move via API
+  const makeMove = async (action: any) => {
+    if (!sessionId || gameStatus === 'completed') return;
 
-  const handleGameEndBanter = (botOutcome: 'win' | 'loss' | 'draw') => {
-    const un = currentOpponent.username.toLowerCase();
-    if (un === 'tola') {
-      if (botOutcome === 'win') setOpponentBanter("Hahaha 3-0!! I told you I've been training! Rematch? 🎮😎");
-      else if (botOutcome === 'loss') setOpponentBanter("Ah no way! Lucky diagonal bro, that doesn't count! Rematch right now 😂");
-      else setOpponentBanter("A draw! We are evenly matched bro. One more round to break the tie? 🤝");
-    } else if (un === 'mum') {
-      if (botOutcome === 'win') setOpponentBanter("Haha! Never underestimate your mother! Now go and drink water and eat some food ❤️");
-      else if (botOutcome === 'loss') setOpponentBanter("Very sharp, Dayo! You have always been clever. I'm proud of you 😊");
-      else setOpponentBanter("A draw! We are both smart in this family. God bless you my dear!");
-    } else if (un === 'chidi') {
-      if (botOutcome === 'win') setOpponentBanter("Minimax depth 3 evaluated the win. Clean placement 💻");
-      else if (botOutcome === 'loss') setOpponentBanter("Unhandled edge case! Impressive move, merge that win 🚀");
-      else setOpponentBanter("Deadlock detected. Zero memory leaks though. Well played 🤝");
-    } else {
-      if (botOutcome === 'win') setOpponentBanter(`Good game! That was close! Ready for a rematch?`);
-      else if (botOutcome === 'loss') setOpponentBanter(`Well played!! You got me this time 👏`);
-      else setOpponentBanter(`Evenly matched! Let's run it back 🤝`);
-    }
-  };
-
-  // --- TIC TAC TOE LOGIC ---
-  const handleTicTacToeClick = (index: number) => {
-    if (board[index] || winner || turn !== 'X') return;
-
-    const newBoard = [...board];
-    newBoard[index] = 'X';
-    setBoard(newBoard);
-
-    // Check human win
-    const winningLines = [
-      [0, 1, 2], [3, 4, 5], [6, 7, 8],
-      [0, 3, 6], [1, 4, 7], [2, 5, 8],
-      [0, 4, 8], [2, 4, 6]
-    ];
-
-    let foundWinner: string | null = null;
-    for (const [a, b, c] of winningLines) {
-      if (newBoard[a] && newBoard[a] === newBoard[b] && newBoard[a] === newBoard[c]) {
-        foundWinner = 'You';
-        break;
-      }
-    }
-
-    if (foundWinner) {
-      setWinner('You');
-      recordResult('w');
-      handleGameEndBanter('loss');
-      if (sessionId) {
-        api.makeGameMove(sessionId, { index, symbol: 'X' }).catch(() => {});
-      }
-      return;
-    }
-
-    if (newBoard.every((cell) => cell !== null)) {
-      setWinner('Draw');
-      recordResult('d');
-      handleGameEndBanter('draw');
-      if (sessionId) {
-        api.makeGameMove(sessionId, { index, symbol: 'X' }).catch(() => {});
-      }
-      return;
-    }
-
-    setTurn('O');
+    // Optimistic local update
     setIsBotThinking(true);
-    setOpponentBanter(`${currentOpponent.displayName} is calculating their counter-move...`);
+    playTone('pop');
 
-    // Sync human move to backend to trigger AI move
-    if (sessionId) {
-      api.makeGameMove(sessionId, { index, symbol: 'X' }).catch(() => {});
-    }
+    try {
+      const res = await api.makeGameMove(sessionId, { action }, 'me');
+      setGameState(res.session.state);
+      setGameStatus(res.session.status);
+      setGameWinnerId(res.session.winnerId || null);
 
-    // Local simulated AI move if backend delay or standalone mode
-    setTimeout(() => {
-      // Find empty slots
-      const emptySlots: number[] = [];
-      newBoard.forEach((val, idx) => {
-        if (!val) emptySlots.push(idx);
-      });
-
-      if (emptySlots.length > 0 && !winner) {
-        // AI: try to win or block
-        let aiPick = -1;
-        // Try win
-        for (const idx of emptySlots) {
-          const test = [...newBoard];
-          test[idx] = 'O';
-          if (winningLines.some(([a, b, c]) => test[a] === 'O' && test[b] === 'O' && test[c] === 'O')) {
-            aiPick = idx;
-            break;
-          }
-        }
-        // Try block
-        if (aiPick < 0) {
-          for (const idx of emptySlots) {
-            const test = [...newBoard];
-            test[idx] = 'X';
-            if (winningLines.some(([a, b, c]) => test[a] === 'X' && test[b] === 'X' && test[c] === 'X')) {
-              aiPick = idx;
-              break;
-            }
-          }
-        }
-        // Center
-        if (aiPick < 0 && !newBoard[4]) aiPick = 4;
-        // Random
-        if (aiPick < 0) {
-          aiPick = emptySlots[Math.floor(Math.random() * emptySlots.length)];
-        }
-
-        newBoard[aiPick] = 'O';
-        setBoard(newBoard);
+      if (res.session.status === 'completed') {
         setIsBotThinking(false);
-
-        // Check bot win
-        if (winningLines.some(([a, b, c]) => newBoard[a] === 'O' && newBoard[b] === 'O' && newBoard[c] === 'O')) {
-          setWinner(currentOpponent.displayName);
-          recordResult('l');
-          handleGameEndBanter('win');
-        } else if (newBoard.every((cell) => cell !== null)) {
-          setWinner('Draw');
-          recordResult('d');
-          handleGameEndBanter('draw');
-        } else {
-          setTurn('X');
-          setOpponentBanter(`Placed at ${['top-left', 'top', 'top-right', 'mid-left', 'center', 'mid-right', 'bot-left', 'bottom', 'bot-right'][aiPick]}! Your turn.`);
-        }
+        const isUser = res.session.winnerId === user?.id;
+        const result = res.session.winnerId ? (isUser ? 'win' : 'loss') : 'draw';
+        playTone(isUser ? 'chime' : 'drop');
+        recordResult(selectedGameKey, result);
       }
-    }, 750);
-  };
-
-  const resetTicTacToe = () => {
-    setBoard(Array(9).fill(null));
-    setTurn('X');
-    setWinner(null);
-    setIsBotThinking(false);
-    setOpponentBanter(`Fresh board! Let's go again.`);
-    if (sessionId) {
-      api.createGameSession('tictactoe', conversationId, currentOpponent.id)
-        .then((res) => setSessionId(res.session.id))
-        .catch(() => {});
+    } catch (err) {
+      setIsBotThinking(false);
+      console.error('Move execution failed:', err);
     }
   };
 
-  // --- CONNECT 4 LOGIC ---
-  const handleC4ColumnClick = (col: number) => {
-    if (c4Winner || c4Turn !== 'red') return;
+  // Status label
+  const getStatusOfGame = () => {
+    if (gameStatus === 'completed') {
+      if (!gameWinnerId) return 'Match drawn!';
+      return gameWinnerId === user?.id ? '🎉 You won!' : `${currentOpponent.displayName} won!`;
+    }
+    const isMyTurn = gameState.turn === 'me' || gameState.turn === 'X' || gameState.turn === 'red' || gameState.turn === 'w';
+    if (isBotThinking) return `${currentOpponent.displayName} is thinking…`;
+    return isMyTurn ? 'Your turn' : `${currentOpponent.displayName} is thinking…`;
+  };
 
-    // Find lowest empty slot in this column (from bottom row 5 to 0)
-    let dropRow = -1;
-    for (let r = 5; r >= 0; r--) {
-      if (!c4Board[r * 7 + col]) {
-        dropRow = r;
-        break;
+  // ===================================================================
+  // RENDER GAMEPLAY ENGINES
+  // ===================================================================
+
+  // 1. Tic-Tac-Toe
+  const renderTicTacToe = () => {
+    const b: string[] = gameState.b || gameState.board || Array(9).fill('');
+    const isMyTurn = (gameState.turn === 'me' || gameState.turn === 'X') && gameStatus === 'in_progress';
+
+    return (
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, maxWidth: 300, margin: '20px auto' }}>
+        {b.map((val, idx) => {
+          const displayChar = val === 'me' || val === 'X' ? 'X' : val === 'them' || val === 'O' ? 'O' : '';
+          return (
+            <button
+              key={idx}
+              type="button"
+              disabled={Boolean(val) || !isMyTurn}
+              onClick={() => makeMove(idx)}
+              style={{
+                aspectRatio: '1',
+                borderRadius: 14,
+                border: '1px solid var(--line)',
+                backgroundColor: 'var(--panel)',
+                color: displayChar === 'X' ? 'var(--accent)' : '#F2B134',
+                fontSize: 34,
+                fontWeight: 700,
+                display: 'grid',
+                placeItems: 'center',
+                cursor: val || !isMyTurn ? 'default' : 'pointer',
+                transition: 'background 0.15s, transform 0.1s',
+              }}
+            >
+              {displayChar}
+            </button>
+          );
+        })}
+      </div>
+    );
+  };
+
+  // 2. Connect Four (7 columns x 6 rows)
+  const renderConnectFour = () => {
+    const b: string[] = gameState.b || gameState.board || Array(42).fill('');
+    const lastMove = gameState.last;
+    const isMyTurn = (gameState.turn === 'me' || gameState.turn === 'red') && gameStatus === 'in_progress';
+
+    return (
+      <div className="c4" role="group" aria-label="Connect Four board">
+        {Array.from({ length: 7 }).map((_, c) => {
+          const colFull = Boolean(b[c]);
+          return (
+            <button
+              key={c}
+              type="button"
+              disabled={colFull || !isMyTurn}
+              onClick={() => makeMove(c)}
+              aria-label={`Drop in column ${c + 1}`}
+            >
+              {Array.from({ length: 6 }).map((_, r) => {
+                const cellIdx = r * 7 + c;
+                const cellVal = b[cellIdx];
+                const isLast = lastMove === cellIdx;
+                const discClass = cellVal === 'me' || cellVal === 'red' ? 'dc me' : cellVal === 'them' || cellVal === 'yellow' ? 'dc them' : 'dc';
+
+                return (
+                  <i
+                    key={r}
+                    className={`${discClass} ${isLast ? 'lm' : ''}`}
+                  />
+                );
+              })}
+            </button>
+          );
+        })}
+      </div>
+    );
+  };
+
+  // 3. Checkers (8x8 board)
+  const renderCheckers = () => {
+    const b: string[] = gameState.b || ckInit();
+    const isMyTurn = gameState.turn === 'me' && gameStatus === 'in_progress';
+    const validMoves = isMyTurn ? ckMoves(b, 'me', gameState.cont || null) : [];
+    const validDests = new Set(
+      validMoves
+        .filter((mv) => selectedBoardSquare !== null && mv.f === selectedBoardSquare)
+        .map((mv) => mv.t)
+    );
+
+    const handleSquareClick = (idx: number) => {
+      if (!isMyTurn) return;
+      if (selectedBoardSquare !== null && validDests.has(idx)) {
+        const moveStr = `${selectedBoardSquare}:${idx}`;
+        setSelectedBoardSquare(null);
+        makeMove(moveStr);
+      } else if (validMoves.some((mv) => mv.f === idx)) {
+        setSelectedBoardSquare(idx);
+      } else {
+        setSelectedBoardSquare(null);
       }
-    }
-    if (dropRow < 0) return; // column full
+    };
 
-    const newBoard = [...c4Board];
-    const placedIndex = dropRow * 7 + col;
-    newBoard[placedIndex] = 'red';
-    setC4Board(newBoard);
+    return (
+      <div className="ckb" role="grid" aria-label="Checkers board">
+        {Array.from({ length: 64 }).map((_, i) => {
+          const r = i >> 3, cc = i & 7;
+          const isDark = (r + cc) % 2 === 1;
+          const p = b[i];
+          const isSelected = selectedBoardSquare === i;
+          const isDest = validDests.has(i);
+          const isLast = gameState.last && (gameState.last[0] === i || gameState.last[1] === i);
 
-    // Check win for red
-    if (checkC4Win(newBoard, 'red')) {
-      setC4Winner('You');
-      recordResult('w');
-      handleGameEndBanter('loss');
-      return;
-    }
-
-    if (newBoard.every((c) => c !== null)) {
-      setC4Winner('Draw');
-      recordResult('d');
-      handleGameEndBanter('draw');
-      return;
-    }
-
-    setC4Turn('yellow');
-    setIsBotThinking(true);
-    setOpponentBanter(`${currentOpponent.displayName} is calculating column drops...`);
-
-    // Bot move
-    setTimeout(() => {
-      // Find valid columns
-      const validCols: number[] = [];
-      for (let c = 0; c < 7; c++) {
-        if (!newBoard[c]) validCols.push(c);
-      }
-
-      if (validCols.length > 0 && !c4Winner) {
-        const botCol = validCols[Math.floor(Math.random() * validCols.length)];
-        let botRow = -1;
-        for (let r = 5; r >= 0; r--) {
-          if (!newBoard[r * 7 + botCol]) {
-            botRow = r;
-            break;
+          if (!isDark) {
+            return <span key={i} className="csq l" />;
           }
-        }
 
-        if (botRow >= 0) {
-          newBoard[botRow * 7 + botCol] = 'yellow';
-          setC4Board(newBoard);
-          setIsBotThinking(false);
-
-          if (checkC4Win(newBoard, 'yellow')) {
-            setC4Winner(currentOpponent.displayName);
-            recordResult('l');
-            handleGameEndBanter('win');
-          } else if (newBoard.every((c) => c !== null)) {
-            setC4Winner('Draw');
-            recordResult('d');
-            handleGameEndBanter('draw');
-          } else {
-            setC4Turn('red');
-            setOpponentBanter(`Dropped in column ${botCol + 1}! Your turn.`);
-          }
-        }
-      }
-    }, 750);
+          return (
+            <button
+              key={i}
+              type="button"
+              className={`csq d ${isSelected ? 'sel' : ''} ${isDest ? 'mv' : ''} ${isLast ? 'lm' : ''}`}
+              disabled={!isMyTurn}
+              onClick={() => handleSquareClick(i)}
+            >
+              {p && (
+                <span className={`pc ${p.toLowerCase()}`}>
+                  {p === p.toUpperCase() ? '♛' : ''}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    );
   };
 
-  const checkC4Win = (b: (string | null)[], symbol: string): boolean => {
-    // Horizontal
-    for (let r = 0; r < 6; r++) {
-      for (let c = 0; c < 4; c++) {
-        const i = r * 7 + c;
-        if (b[i] === symbol && b[i + 1] === symbol && b[i + 2] === symbol && b[i + 3] === symbol) return true;
+  // 4. Chess (8x8 board)
+  const renderChess = () => {
+    const b: string[] = gameState.b || chInit();
+    const isMyTurn = (gameState.turn === 'me' || gameState.turn === 'w') && gameStatus === 'in_progress';
+    const legalMoves = isMyTurn ? chLegal(b, 'w') : [];
+    const validDests = new Set(
+      legalMoves
+        .filter((mv) => selectedBoardSquare !== null && mv.f === selectedBoardSquare)
+        .map((mv) => mv.t)
+    );
+    const inCheck = chCheck(b, 'w') ? chKing(b, 'w') : chCheck(b, 'b') ? chKing(b, 'b') : -1;
+
+    const handleSquareClick = (idx: number) => {
+      if (!isMyTurn) return;
+      if (selectedBoardSquare !== null && validDests.has(idx)) {
+        const moveStr = `${selectedBoardSquare}:${idx}`;
+        setSelectedBoardSquare(null);
+        makeMove(moveStr);
+      } else if (legalMoves.some((mv) => mv.f === idx)) {
+        setSelectedBoardSquare(idx);
+      } else {
+        setSelectedBoardSquare(null);
       }
-    }
-    // Vertical
-    for (let r = 0; r < 3; r++) {
-      for (let c = 0; c < 7; c++) {
-        const i = r * 7 + c;
-        if (b[i] === symbol && b[i + 7] === symbol && b[i + 14] === symbol && b[i + 21] === symbol) return true;
-      }
-    }
-    // Diagonal down-right
-    for (let r = 0; r < 3; r++) {
-      for (let c = 0; c < 4; c++) {
-        const i = r * 7 + c;
-        if (b[i] === symbol && b[i + 8] === symbol && b[i + 16] === symbol && b[i + 24] === symbol) return true;
-      }
-    }
-    // Diagonal up-right
-    for (let r = 3; r < 6; r++) {
-      for (let c = 0; c < 4; c++) {
-        const i = r * 7 + c;
-        if (b[i] === symbol && b[i - 6] === symbol && b[i - 12] === symbol && b[i - 18] === symbol) return true;
-      }
-    }
-    return false;
+    };
+
+    return (
+      <div>
+        <div className="chb" role="grid" aria-label="Chess board">
+          {Array.from({ length: 64 }).map((_, i) => {
+            const r = i >> 3, cc = i & 7;
+            const isDark = (r + cc) % 2 === 1;
+            const p = b[i];
+            const isSelected = selectedBoardSquare === i;
+            const isDest = validDests.has(i);
+            const isCheckSquare = inCheck === i;
+            const isLast = gameState.last && (gameState.last[0] === i || gameState.last[1] === i);
+
+            return (
+              <button
+                key={i}
+                type="button"
+                className={`csq ${isDark ? 'd' : 'l'} ${isSelected ? 'sel' : ''} ${isDest ? 'mv' : ''} ${isCheckSquare ? 'chk' : ''} ${isLast ? 'lm' : ''}`}
+                disabled={!isMyTurn}
+                onClick={() => handleSquareClick(i)}
+              >
+                {p && (
+                  <span className={p[0] === 'w' ? 'pw' : 'pb'}>
+                    {CHG[p[1]] || '♟'}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+        <p style={{ textAlign: 'center', fontSize: 12, color: 'var(--muted)', margin: '4px 0 0' }}>
+          You play white. Pawns auto-promote to Queen.
+        </p>
+      </div>
+    );
   };
 
-  // --- ROCK PAPER SCISSORS LOGIC ---
-  const handleRpsPick = (choice: 'rock' | 'paper' | 'scissors') => {
-    if (rpsStatus) return;
+  // 5. Rock Paper Scissors
+  const renderRPS = () => {
+    const rounds = gameState.rd || [];
+    const tally = rpsTally(rounds);
+    const last = rounds[rounds.length - 1];
 
-    const choices: ('rock' | 'paper' | 'scissors')[] = ['rock', 'paper', 'scissors'];
-    const oppChoice = choices[Math.floor(Math.random() * choices.length)];
+    return (
+      <div style={{ padding: '16px 0', textAlign: 'center' }}>
+        <div className="rpsr">
+          {(['r', 'p', 's'] as const).map((k) => (
+            <button
+              key={k}
+              type="button"
+              disabled={gameStatus === 'completed'}
+              onClick={() => makeMove(k)}
+              aria-label={k === 'r' ? 'Rock' : k === 'p' ? 'Paper' : 'Scissors'}
+            >
+              {RPSE[k]}
+            </button>
+          ))}
+        </div>
 
-    let res = 'draw';
-    if (
-      (choice === 'rock' && oppChoice === 'scissors') ||
-      (choice === 'paper' && oppChoice === 'rock') ||
-      (choice === 'scissors' && oppChoice === 'paper')
-    ) {
-      res = 'user';
-    } else if (choice !== oppChoice) {
-      res = 'opponent';
-    }
+        <div className="rpsx">
+          You {tally.me} · {tally.them} {currentOpponent.displayName}
+        </div>
 
-    const updated = [...rpsRounds, { user: choice, opp: oppChoice, winner: res }];
-    setRpsRounds(updated);
+        {last && (
+          <div className="rpsl">
+            Last round: {RPSE[last.me]} vs {RPSE[last.them]} ·{' '}
+            {rpsBeats(last.me, last.them)
+              ? 'you win it!'
+              : rpsBeats(last.them, last.me)
+              ? `${currentOpponent.displayName} wins it`
+              : 'draw, go again!'}
+          </div>
+        )}
+      </div>
+    );
+  };
 
-    const userW = updated.filter((r) => r.winner === 'user').length;
-    const oppW = updated.filter((r) => r.winner === 'opponent').length;
+  // 6. Trivia Quiz
+  const renderTrivia = () => {
+    const qs = gameState.qs || [];
+    const i = gameState.i || 0;
+    const score = gameState.score || 0;
+    const fb = gameState.fb;
+    const currentQ = qs[i];
 
-    if (userW >= 2) {
-      setRpsStatus('You won the match! 🎉');
-      recordResult('w');
-      handleGameEndBanter('loss');
-    } else if (oppW >= 2) {
-      setRpsStatus(`${currentOpponent.displayName} won the match!`);
-      recordResult('l');
-      handleGameEndBanter('win');
-    } else {
-      setOpponentBanter(
-        res === 'user'
-          ? `You took round ${updated.length}! ${choice.toUpperCase()} beats ${oppChoice.toUpperCase()}`
-          : res === 'opponent'
-          ? `I took round ${updated.length}! ${oppChoice.toUpperCase()} beats ${choice.toUpperCase()}`
-          : `Tie round! Both chose ${choice.toUpperCase()}`
+    if (gameStatus === 'completed') {
+      return (
+        <div className="lbd">
+          <h3 style={{ textAlign: 'center', margin: '0 0 12px' }}>Trivia Results</h3>
+          <div className="lbr you">
+            <span>1</span>
+            <b>You</b>
+            <i>{score} / 5</i>
+          </div>
+          <div className="lbr">
+            <span>2</span>
+            <b>{currentOpponent.displayName}</b>
+            <i>{Math.min(5, Math.max(1, score + (Math.random() > 0.5 ? 1 : -1)))} / 5</i>
+          </div>
+        </div>
       );
     }
+
+    if (!currentQ) return null;
+
+    return (
+      <div style={{ padding: '8px 4px' }}>
+        <div className="trn">
+          Question {i + 1} of 5 · Score {score}
+        </div>
+        <div className="trq">{currentQ.q}</div>
+
+        <div className="tro">
+          {currentQ.o.map((opt: string, optIdx: number) => {
+            let optClass = 'trop';
+            if (fb) {
+              if (optIdx === currentQ.a) optClass += ' ok';
+              else if (optIdx === fb.p) optClass += ' bad';
+            }
+
+            return (
+              <button
+                key={optIdx}
+                type="button"
+                disabled={Boolean(fb)}
+                className={optClass}
+                onClick={() => makeMove(optIdx)}
+              >
+                {opt}
+              </button>
+            );
+          })}
+        </div>
+
+        {fb && (
+          <div style={{ marginTop: 14, textAlign: 'center' }}>
+            <button
+              className="gcwide"
+              type="button"
+              onClick={() => makeMove('next')}
+            >
+              {i >= 4 ? 'See Results' : 'Next Question'}
+            </button>
+          </div>
+        )}
+      </div>
+    );
   };
 
-  // --- WORD GUESS LOGIC ---
-  const handleWordSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (currentGuess.length !== 5 || wordStatus !== 'playing') return;
+  // 7. Word Scramble
+  const renderWordScramble = () => {
+    const ws = gameState.ws || [];
+    const i = gameState.i || 0;
+    const solved = gameState.solved || 0;
+    const msg = gameState.msg || '';
+    const currentW = ws[i];
 
-    const guessUpper = currentGuess.toUpperCase();
-    const newGuesses = [...wordGuesses, guessUpper];
-    setWordGuesses(newGuesses);
-    setCurrentGuess('');
-
-    if (guessUpper === targetWord) {
-      setWordStatus('won');
-      recordResult('w');
-      handleGameEndBanter('loss');
-    } else if (newGuesses.length >= 6) {
-      setWordStatus('lost');
-      recordResult('l');
-      handleGameEndBanter('win');
+    if (gameStatus === 'completed') {
+      return (
+        <div className="lbd">
+          <h3 style={{ textAlign: 'center', margin: '0 0 12px' }}>Word Scramble Final Score</h3>
+          <div className="lbr you">
+            <span>1</span>
+            <b>You</b>
+            <i>{solved} / 5 solved</i>
+          </div>
+          <div className="lbr">
+            <span>2</span>
+            <b>{currentOpponent.displayName}</b>
+            <i>{Math.min(5, Math.max(1, solved + (Math.random() > 0.5 ? 1 : -1)))} / 5 solved</i>
+          </div>
+        </div>
+      );
     }
+
+    if (!currentW) return null;
+
+    return (
+      <div style={{ padding: '8px 4px' }}>
+        <div className="trn">
+          Word {i + 1} of 5 · Solved {solved}
+        </div>
+
+        <div className="wsc" aria-label="Scrambled letters">
+          {currentW.s.split('').map((l: string, idx: number) => (
+            <i key={idx}>{l}</i>
+          ))}
+        </div>
+
+        <form
+          className="wsf"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (wordGuessInput.trim()) {
+              makeMove(`g:${wordGuessInput}`);
+              setWordGuessInput('');
+            }
+          }}
+        >
+          <input
+            id="wgi"
+            autoComplete="off"
+            autoCapitalize="characters"
+            spellCheck={false}
+            maxLength={12}
+            aria-label="Your answer"
+            placeholder="TYPE THE WORD"
+            value={wordGuessInput}
+            onChange={(e) => setWordGuessInput(e.target.value.toUpperCase())}
+          />
+          <button className="postb" type="submit" style={{ padding: '0 16px', borderRadius: 12 }}>
+            Check
+          </button>
+        </form>
+
+        <div className="wsm" aria-live="polite">
+          {msg}
+        </div>
+
+        <div style={{ textAlign: 'center', marginTop: 10 }}>
+          <button
+            className="outb"
+            type="button"
+            onClick={() => makeMove('skip')}
+            style={{ padding: '6px 16px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--panel)', color: 'var(--ink)' }}
+          >
+            Skip Word
+          </button>
+        </div>
+      </div>
+    );
   };
 
-  const oppStats = scores[currentOpponent.username.toLowerCase()] || { w: 0, l: 0, d: 0 };
+  // ===================================================================
+  // MAIN VIEW RENDERER
+  // ===================================================================
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        height: '100%',
-        backgroundColor: 'var(--panel)',
-        padding: 16,
-        overflowY: 'auto',
-      }}
-    >
-      {/* Top Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div
-            style={{
-              width: 38,
-              height: 38,
-              borderRadius: 12,
-              backgroundColor: 'rgba(235, 193, 94, 0.16)',
-              color: 'var(--gold)',
-              display: 'grid',
-              placeItems: 'center',
-            }}
+    <div style={{ width: '100%', maxWidth: 480, margin: '0 auto', display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
+      {/* Floating LFG Notification Banner (#lfpop) */}
+      {floatingNotification && (
+        <div className="lfpop">
+          <span className="lpe">🎮</span>
+          <span className="lpt">{floatingNotification.text}</span>
+          {floatingNotification.actionLabel && (
+            <button
+              className="postb"
+              onClick={() => {
+                floatingNotification.onAction?.();
+                setFloatingNotification(null);
+              }}
+            >
+              {floatingNotification.actionLabel}
+            </button>
+          )}
+          <button
+            onClick={() => setFloatingNotification(null)}
+            style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--muted)', display: 'grid', placeItems: 'center' }}
           >
-            <Gamepad2 size={22} />
-          </div>
-          <div>
-            <h3 style={{ fontSize: 17, fontWeight: 700, color: 'var(--ink)' }}>Play & Games</h3>
-            <span style={{ fontSize: 12, color: 'var(--muted)' }}>Turn-based duels with friends</span>
-          </div>
+            <X size={16} />
+          </button>
+        </div>
+      )}
+
+      {/* Top Header Bar */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '14px 16px',
+          borderBottom: '1px solid var(--line)',
+          backgroundColor: 'var(--panel)',
+          position: 'sticky',
+          top: 0,
+          zIndex: 20,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          {view !== 'home' && (
+            <button
+              onClick={() => setView('home')}
+              style={{
+                width: 32,
+                height: 32,
+                borderRadius: '50%',
+                border: 'none',
+                background: 'var(--hover)',
+                display: 'grid',
+                placeItems: 'center',
+                cursor: 'pointer',
+                color: 'var(--ink)',
+              }}
+            >
+              <ChevronLeft size={20} />
+            </button>
+          )}
+          <h2 style={{ fontSize: 17, fontWeight: 700, margin: 0, color: 'var(--ink)' }}>
+            {view === 'home' && 'Games'}
+            {view === 'find' && 'Find a Player'}
+            {view === 'create' && 'Create a Game'}
+            {view === 'mine' && 'My Games'}
+            {view === 'chal' && 'Challenges'}
+            {view === 'active' && 'Active Matches'}
+            {view === 'hist' && 'Game History'}
+            {view === 'play' && `${GM[selectedGameKey]?.n || 'Match'} · ${currentOpponent.displayName}`}
+          </h2>
         </div>
 
         {onClose && (
           <button
             onClick={onClose}
-            style={{ width: 32, height: 32, borderRadius: '50%', display: 'grid', placeItems: 'center', color: 'var(--muted)' }}
+            style={{
+              width: 32,
+              height: 32,
+              borderRadius: '50%',
+              border: 'none',
+              background: 'var(--hover)',
+              display: 'grid',
+              placeItems: 'center',
+              cursor: 'pointer',
+              color: 'var(--muted)',
+            }}
           >
             <X size={18} />
           </button>
         )}
       </div>
 
-      {/* Opponent Card & Selector */}
-      {(() => {
-        const isCurOnline = isOnline(currentOpponent.id);
-        const curStatus = getStatusLabel(currentOpponent.id);
-        const isFromChat = !!initialOpponent && (currentOpponent.id === initialOpponent.id || currentOpponent.username === initialOpponent.username);
+      {/* Body Views */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: 16 }}>
+        {/* 1. HOME VIEW (Hub with 6 Navigation Rows) */}
+        {view === 'home' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <button className="gcrow" onClick={() => { setView('find'); loadLFG(); }}>
+              <span className="gce">
+                <Radio size={20} />
+              </span>
+              <span className="gct">
+                <b>Find a Player</b>
+                <small>{lfgPosts.length ? `${lfgPosts.length} open games right now` : 'Post when you want a game'}</small>
+              </span>
+              {lfgPosts.length > 0 && <span className="gcb2 hot">{lfgPosts.length}</span>}
+            </button>
 
-        const chatOpponent = availableOpponents.find(
-          (b) => initialOpponent && (b.id === initialOpponent.id || b.username === initialOpponent.username)
-        );
-        const onlineOpponents = availableOpponents.filter(
-          (b) => isOnline(b.id) && (!initialOpponent || (b.id !== initialOpponent.id && b.username !== initialOpponent.username))
-        );
-        const offlineOpponents = availableOpponents.filter(
-          (b) => !isOnline(b.id) && (!initialOpponent || (b.id !== initialOpponent.id && b.username !== initialOpponent.username))
-        );
+            <button className="gcrow" onClick={() => setView('create')}>
+              <span className="gce">
+                <Swords size={20} />
+              </span>
+              <span className="gct">
+                <b>Create a Game</b>
+                <small>Challenge a friend or a group</small>
+              </span>
+            </button>
 
-        return (
-          <>
-            <div
-              style={{
-                position: 'relative',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                padding: '10px 14px',
-                borderRadius: 14,
-                backgroundColor: 'var(--side)',
-                border: '1px solid var(--line)',
-                marginBottom: 10,
+            <button className="gcrow" onClick={() => setView('mine')}>
+              <span className="gce">
+                <Gamepad2 size={20} />
+              </span>
+              <span className="gct">
+                <b>My Games</b>
+                <small>Your records and favorite games</small>
+              </span>
+            </button>
+
+            <button className="gcrow" onClick={() => setView('chal')}>
+              <span className="gce">
+                <Trophy size={20} />
+              </span>
+              <span className="gct">
+                <b>Challenges</b>
+                <small>{challenges.length ? `${challenges.length} waiting for answer` : 'Sent and received'}</small>
+              </span>
+              {challenges.length > 0 && <span className="gcb2 hot">{challenges.length}</span>}
+            </button>
+
+            <button className="gcrow" onClick={() => setView('active')}>
+              <span className="gce">
+                <CheckCircle2 size={20} />
+              </span>
+              <span className="gct">
+                <b>Active Matches</b>
+                <small>{activeMatches.length ? `${activeMatches.length} in progress` : 'Nothing in progress'}</small>
+              </span>
+            </button>
+
+            <button className="gcrow" onClick={() => setView('hist')}>
+              <span className="gce">
+                <History size={20} />
+              </span>
+              <span className="gct">
+                <b>Game History</b>
+                <small>{gameHistory.length ? `${gameHistory.length} matches played` : 'Finished matches'}</small>
+              </span>
+            </button>
+          </div>
+        )}
+
+        {/* 2. FIND A PLAYER (LFG Feed) */}
+        {view === 'find' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <button className="gcwide" onClick={() => setShowLfgModal(true)}>
+              + Looking for a Player
+            </button>
+
+            <div className="gch">Open Games</div>
+            {lfgPosts.filter((p) => p.status === 'open' && p.by !== user?.id).length === 0 ? (
+              <div className="gcempty">
+                <b>No open posts right now</b>
+                <span>Tap "Looking for a Player" to invite friends and bot rivals.</span>
+              </div>
+            ) : (
+              lfgPosts
+                .filter((p) => p.status === 'open' && p.by !== user?.id)
+                .map((p) => {
+                  const g = GM[p.gameKey] || { n: 'Game', e: '🎮' };
+                  const isJoined = (p.joined || []).some((j: any) => j.id === user?.id);
+                  return (
+                    <div key={p.id} className="mrow">
+                      <span className="gic">{g.e}</span>
+                      <span className="gtx">
+                        <b>{p.byUser?.displayName || 'Friend'} is looking for {g.n}</b>
+                        <small>
+                          {p.mode === 'party' ? 'Party' : '1v1'} · {p.playersNeeded} needed
+                          {p.note ? ` · "${p.note}"` : ''}
+                        </small>
+                      </span>
+                      <span className="mbt">
+                        {isJoined ? (
+                          <span className="lfst">Joined</span>
+                        ) : (
+                          <button
+                            type="button"
+                            className="postb"
+                            onClick={async () => {
+                              try {
+                                const res = await api.joinLFGPost(p.id);
+                                if (res.post?.matchSessionId) {
+                                  openSession(res.post.matchSessionId, p.gameKey, p.byUser?.displayName || 'Friend');
+                                } else {
+                                  loadLFG();
+                                }
+                              } catch (err) {
+                                console.error('Join LFG error:', err);
+                              }
+                            }}
+                          >
+                            Join Game
+                          </button>
+                        )}
+                      </span>
+                    </div>
+                  );
+                })
+            )}
+
+            <div className="gch">Your Posts</div>
+            {lfgPosts.filter((p) => p.by === user?.id).length === 0 ? (
+              <div className="gcempty">
+                <b>No active posts yet</b>
+              </div>
+            ) : (
+              lfgPosts
+                .filter((p) => p.by === user?.id)
+                .map((p) => {
+                  const g = GM[p.gameKey] || { n: 'Game', e: '🎮' };
+                  return (
+                    <div key={p.id} className="mrow">
+                      <span className="gic">{g.e}</span>
+                      <span className="gtx">
+                        <b>{g.n} · {p.mode}</b>
+                        <small>Status: {p.status}</small>
+                      </span>
+                      <span className="mbt">
+                        {p.status === 'open' ? (
+                          <button
+                            type="button"
+                            className="outb"
+                            onClick={async () => {
+                              await api.closeLFGPost(p.id);
+                              loadLFG();
+                            }}
+                          >
+                            Close
+                          </button>
+                        ) : p.matchSessionId ? (
+                          <button
+                            type="button"
+                            className="postb"
+                            onClick={() => openSession(p.matchSessionId, p.gameKey, 'Opponent')}
+                          >
+                            Play
+                          </button>
+                        ) : null}
+                      </span>
+                    </div>
+                  );
+                })
+            )}
+          </div>
+        )}
+
+        {/* 3. CREATE A GAME */}
+        {view === 'create' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div className="gch">1. Pick a Game</div>
+            <div className="gpick">
+              {GORDER.map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  aria-pressed={selectedGameKey === k}
+                  onClick={() => setSelectedGameKey(k)}
+                >
+                  <span className="gic">{GM[k].e}</span>
+                  <span>
+                    <b>{GM[k].n}</b>
+                    <small>{GM[k].d}</small>
+                  </span>
+                </button>
+              ))}
+            </div>
+
+            <div className="gch">2. Pick Opponent</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 200, overflowY: 'auto' }}>
+              {opponents.map((opp) => (
+                <button
+                  key={opp.id}
+                  type="button"
+                  onClick={() => setSelectedTargetUser(opp.id)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 10,
+                    padding: '8px 12px',
+                    borderRadius: 12,
+                    border: selectedTargetUser === opp.id ? '2px solid var(--accent)' : '1px solid var(--line)',
+                    background: 'var(--panel)',
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                  }}
+                >
+                  <Avatar url={opp.avatarUrl} name={opp.displayName} size={36} online={isOnline(opp.id)} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <b style={{ display: 'block', fontSize: 13.5, color: 'var(--ink)' }}>{opp.displayName}</b>
+                    <small style={{ color: 'var(--muted)', fontSize: 12 }}>
+                      {opp.isBot ? 'Bot Rival' : isOnline(opp.id) ? 'Online' : 'Offline'}
+                    </small>
+                  </div>
+                </button>
+              ))}
+            </div>
+
+            <button
+              className="gcwide"
+              disabled={!selectedTargetUser}
+              onClick={() => {
+                const target = opponents.find((o) => o.id === selectedTargetUser);
+                if (target) {
+                  startMatch(selectedGameKey, target);
+                }
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                {/* Avatar with live dot */}
-                <div style={{ position: 'relative' }}>
-                  {currentOpponent.avatarUrl ? (
-                    <img
-                      src={currentOpponent.avatarUrl}
-                      alt={currentOpponent.displayName}
-                      style={{ width: 42, height: 42, borderRadius: '50%', objectFit: 'cover' }}
-                    />
-                  ) : (
-                    <div
-                      style={{
-                        width: 42,
-                        height: 42,
-                        borderRadius: '50%',
-                        backgroundColor: 'var(--accent)',
-                        color: '#fff',
-                        fontWeight: 700,
-                        fontSize: 16,
-                        display: 'grid',
-                        placeItems: 'center',
-                      }}
-                    >
-                      {currentOpponent.displayName[0]}
-                    </div>
-                  )}
-                  <span
-                    style={{
-                      position: 'absolute',
-                      bottom: 0,
-                      right: 0,
-                      width: 11,
-                      height: 11,
-                      borderRadius: '50%',
-                      backgroundColor: isCurOnline ? 'var(--ok)' : 'var(--muted)',
-                      border: '2px solid var(--side)',
-                    }}
-                  />
-                </div>
+              Start Duel
+            </button>
+          </div>
+        )}
 
-                <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.5, fontWeight: 600 }}>
-                      Opponent
-                    </span>
-                    {isFromChat && (
-                      <span
-                        style={{
-                          fontSize: 10.5,
-                          backgroundColor: 'rgba(15, 107, 88, 0.15)',
-                          color: 'var(--accent)',
-                          padding: '1px 6px',
-                          borderRadius: 6,
-                          fontWeight: 700,
-                        }}
-                      >
-                        From your chat
-                      </span>
-                    )}
-                    <span
-                      style={{
-                        fontSize: 10.5,
-                        backgroundColor: isCurOnline ? 'rgba(37, 160, 108, 0.15)' : 'var(--hover)',
-                        color: isCurOnline ? 'var(--ok)' : 'var(--muted)',
-                        padding: '1px 6px',
-                        borderRadius: 6,
-                        fontWeight: 600,
+        {/* 4. MY GAMES */}
+        {view === 'mine' && (
+          <div className="gmg">
+            {GORDER.map((k) => {
+              const s = gameStats[k] || { w: 0, l: 0, d: 0 };
+              const total = s.w + s.l + s.d;
+              return (
+                <div key={k} className="gmc">
+                  <span className="gic">{GM[k].e}</span>
+                  <b style={{ color: 'var(--ink)', fontSize: 14 }}>{GM[k].n}</b>
+                  <small>
+                    {total ? `${total} played · ${s.w}W ${s.l}L ${s.d}D` : 'Not played yet'}
+                  </small>
+                  <div className="gbt2">
+                    <button
+                      type="button"
+                      className="postb"
+                      onClick={() => {
+                        setSelectedGameKey(k);
+                        setView('create');
                       }}
                     >
-                      {isCurOnline ? 'Online' : curStatus}
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <b style={{ fontSize: 15, color: 'var(--ink)' }}>{currentOpponent.displayName}</b>
-                    <span style={{ fontSize: 12, color: 'var(--muted)' }}>
-                      ({currentOpponent.botPersona?.relationship || currentOpponent.bio?.slice(0, 24) || 'Bot'})
-                    </span>
+                      Challenge
+                    </button>
+                    <button
+                      type="button"
+                      className="outb"
+                      onClick={() => {
+                        setLfgForm((prev) => ({ ...prev, gid: k }));
+                        setShowLfgModal(true);
+                      }}
+                    >
+                      Find
+                    </button>
                   </div>
                 </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* 5. CHALLENGES */}
+        {view === 'chal' && (
+          <div>
+            <div className="gch">Received</div>
+            <div className="gcempty">
+              <b>No challenges waiting</b>
+              <span>When a friend or rival challenges you, it shows up here.</span>
+            </div>
+
+            <div className="gch" style={{ marginTop: 16 }}>Sent</div>
+            <div className="gcempty">
+              <b>Nothing pending</b>
+              <span>Challenges you send wait here for an answer.</span>
+            </div>
+          </div>
+        )}
+
+        {/* 6. ACTIVE MATCHES */}
+        {view === 'active' && (
+          <div>
+            {sessionId ? (
+              <div className="mrow">
+                <span className="gic">{GM[selectedGameKey]?.e || '🎮'}</span>
+                <span className="gtx">
+                  <b>{GM[selectedGameKey]?.n || 'Match'} · {currentOpponent.displayName}</b>
+                  <small>{getStatusOfGame()}</small>
+                </span>
+                <span className="mbt">
+                  <button className="postb" onClick={() => setView('play')}>
+                    Continue
+                  </button>
+                </span>
               </div>
+            ) : (
+              <div className="gcempty">
+                <b>No active matches</b>
+                <span>Accept a challenge or create a game to duel.</span>
+              </div>
+            )}
+          </div>
+        )}
 
-              {/* Change Opponent Button */}
+        {/* 7. GAME HISTORY */}
+        {view === 'hist' && (
+          <div>
+            <div className="gsum">
+              <div>
+                <b>{Object.values(gameStats).reduce((acc, s) => acc + s.w, 0)}</b>
+                <small>Won</small>
+              </div>
+              <div>
+                <b>{Object.values(gameStats).reduce((acc, s) => acc + s.l, 0)}</b>
+                <small>Lost</small>
+              </div>
+              <div>
+                <b>{Object.values(gameStats).reduce((acc, s) => acc + s.d, 0)}</b>
+                <small>Draws</small>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+              {(['all', 'win', 'loss', 'draw'] as const).map((f) => (
+                <button
+                  key={f}
+                  type="button"
+                  onClick={() => setHistoryFilter(f)}
+                  style={{
+                    flex: 1,
+                    padding: '6px 0',
+                    borderRadius: 8,
+                    border: '1px solid var(--line)',
+                    background: historyFilter === f ? 'var(--accent)' : 'var(--panel)',
+                    color: historyFilter === f ? 'var(--accent-ink)' : 'var(--ink)',
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    textTransform: 'capitalize',
+                  }}
+                >
+                  {f === 'all' ? 'All' : f === 'win' ? 'Wins' : f === 'loss' ? 'Losses' : 'Draws'}
+                </button>
+              ))}
+            </div>
+
+            {gameHistory.length === 0 ? (
+              <div className="gcempty">
+                <b>Nothing here yet</b>
+                <span>Finished matches are recorded here.</span>
+              </div>
+            ) : (
+              gameHistory
+                .filter((h) => historyFilter === 'all' || h.res === historyFilter)
+                .map((h) => (
+                  <div key={h.id} className="mrow">
+                    <span className="gic">{GM[h.gid]?.e || '🎮'}</span>
+                    <span className="gtx">
+                      <b>{GM[h.gid]?.n || 'Game'} · {h.opponentName}</b>
+                      <small>{new Date(h.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</small>
+                    </span>
+                    <span className={`res ${h.res}`}>
+                      {h.res === 'win' ? 'Won' : h.res === 'loss' ? 'Lost' : 'Draw'}
+                    </span>
+                  </div>
+                ))
+            )}
+          </div>
+        )}
+
+        {/* 8. MATCH PLAY VIEW */}
+        {view === 'play' && (
+          <div>
+            <div style={{ textAlign: 'center', marginBottom: 14 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--muted)', marginBottom: 2 }}>
+                {getStatusOfGame()}
+              </div>
+            </div>
+
+            {/* Render respective engine */}
+            {selectedGameKey === 'ttt' && renderTicTacToe()}
+            {selectedGameKey === 'c4' && renderConnectFour()}
+            {selectedGameKey === 'checkers' && renderCheckers()}
+            {selectedGameKey === 'chess' && renderChess()}
+            {selectedGameKey === 'rps' && renderRPS()}
+            {selectedGameKey === 'trivia' && renderTrivia()}
+            {selectedGameKey === 'word' && renderWordScramble()}
+
+            {/* Bottom Actions */}
+            <div style={{ display: 'flex', gap: 10, marginTop: 24, justifyContent: 'center' }}>
+              {gameStatus === 'in_progress' ? (
+                <button
+                  type="button"
+                  className="outb"
+                  onClick={() => {
+                    setGameStatus('completed');
+                    setGameWinnerId(currentOpponent.id);
+                    recordResult(selectedGameKey, 'loss');
+                    playTone('drop');
+                  }}
+                  style={{
+                    padding: '8px 18px',
+                    borderRadius: 999,
+                    border: '1px solid #e5472b',
+                    background: 'none',
+                    color: '#e5472b',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Resign
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="gcwide"
+                  onClick={() => startMatch(selectedGameKey, currentOpponent)}
+                >
+                  Rematch
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* LFG Modal (#lfPostModal) */}
+      {showLfgModal && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0,0,0,0.5)',
+            zIndex: 9999,
+            display: 'grid',
+            placeItems: 'center',
+            padding: 16,
+          }}
+        >
+          <div
+            style={{
+              backgroundColor: 'var(--panel)',
+              borderRadius: 20,
+              padding: 24,
+              width: '100%',
+              maxWidth: 420,
+              border: '1px solid var(--line)',
+              boxShadow: '0 20px 40px rgba(0,0,0,0.3)',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+              <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0, color: 'var(--ink)' }}>Looking for a Player</h2>
               <button
-                onClick={() => setShowOpponentPicker(!showOpponentPicker)}
+                onClick={() => setShowLfgModal(false)}
+                style={{ width: 30, height: 30, borderRadius: '50%', border: 'none', background: 'var(--hover)', cursor: 'pointer', display: 'grid', placeItems: 'center' }}
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="gch">Game</div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '6px 0 12px' }}>
+              {GORDER.map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => {
+                    const isPar = Boolean(GM[k].par);
+                    setLfgForm((prev) => ({
+                      ...prev,
+                      gid: k,
+                      mode: isPar ? prev.mode : '1v1',
+                      need: isPar && prev.mode === 'party' ? 3 : 1,
+                    }));
+                  }}
+                  style={{
+                    padding: '6px 12px',
+                    borderRadius: 10,
+                    border: '1px solid var(--line)',
+                    background: lfgForm.gid === k ? 'var(--accent)' : 'var(--panel)',
+                    color: lfgForm.gid === k ? 'var(--accent-ink)' : 'var(--ink)',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {GM[k].n}
+                </button>
+              ))}
+            </div>
+
+            <div className="gch">Mode</div>
+            <div style={{ display: 'flex', gap: 8, margin: '6px 0 12px' }}>
+              <button
+                type="button"
+                onClick={() => setLfgForm((prev) => ({ ...prev, mode: '1v1', need: 1 }))}
                 style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 4,
-                  padding: '6px 12px',
-                  borderRadius: 20,
-                  backgroundColor: 'var(--panel)',
+                  flex: 1,
+                  padding: '8px 0',
+                  borderRadius: 10,
                   border: '1px solid var(--line)',
-                  fontSize: 12,
+                  background: lfgForm.mode === '1v1' ? 'var(--accent)' : 'var(--panel)',
+                  color: lfgForm.mode === '1v1' ? 'var(--accent-ink)' : 'var(--ink)',
                   fontWeight: 600,
-                  color: 'var(--ink)',
                   cursor: 'pointer',
                 }}
               >
-                <span>Change</span>
-                <ChevronDown size={14} />
+                1v1
               </button>
-
-              {/* Dropdown Opponent Picker */}
-              {showOpponentPicker && (
-                <div
-                  style={{
-                    position: 'absolute',
-                    top: '100%',
-                    right: 14,
-                    marginTop: 6,
-                    zIndex: 40,
-                    backgroundColor: 'var(--panel)',
-                    border: '1px solid var(--line)',
-                    borderRadius: 14,
-                    boxShadow: '0 12px 32px rgba(0,0,0,0.18)',
-                    padding: 8,
-                    minWidth: 280,
-                    maxHeight: 340,
-                    overflowY: 'auto',
-                  }}
-                >
-                  {/* From Chat Group */}
-                  {chatOpponent && (
-                    <div style={{ marginBottom: 8 }}>
-                      <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--accent)', padding: '4px 8px', textTransform: 'uppercase' }}>
-                        From This Chat
-                      </div>
-                      <button
-                        key={chatOpponent.id}
-                        onClick={() => {
-                          setCurrentOpponent(chatOpponent);
-                          setShowOpponentPicker(false);
-                        }}
-                        style={{
-                          width: '100%',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 10,
-                          padding: '7px 10px',
-                          borderRadius: 8,
-                          backgroundColor: currentOpponent.username === chatOpponent.username ? 'var(--hover)' : 'transparent',
-                          border: '1px solid rgba(15, 107, 88, 0.25)',
-                          textAlign: 'left',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        <div style={{ position: 'relative' }}>
-                          <div style={{ width: 32, height: 32, borderRadius: '50%', backgroundColor: 'var(--accent)', color: '#fff', display: 'grid', placeItems: 'center', fontWeight: 700, fontSize: 13 }}>
-                            {chatOpponent.displayName[0]}
-                          </div>
-                          <span
-                            style={{
-                              position: 'absolute',
-                              bottom: -1,
-                              right: -1,
-                              width: 9,
-                              height: 9,
-                              borderRadius: '50%',
-                              backgroundColor: isOnline(chatOpponent.id) ? 'var(--ok)' : 'var(--muted)',
-                              border: '1.5px solid var(--panel)',
-                            }}
-                          />
-                        </div>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                            <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink)' }}>{chatOpponent.displayName}</span>
-                            <span style={{ fontSize: 10.5, color: isOnline(chatOpponent.id) ? 'var(--ok)' : 'var(--muted)', fontWeight: 600 }}>
-                              {isOnline(chatOpponent.id) ? 'Online' : getStatusLabel(chatOpponent.id)}
-                            </span>
-                          </div>
-                          <div style={{ fontSize: 11, color: 'var(--muted)', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
-                            {chatOpponent.botPersona?.relationship || chatOpponent.bio || 'Chat Partner'}
-                          </div>
-                        </div>
-                      </button>
-                    </div>
-                  )}
-
-                  {/* Online Now Group */}
-                  {onlineOpponents.length > 0 && (
-                    <div style={{ marginBottom: 8 }}>
-                      <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--ok)', padding: '4px 8px', textTransform: 'uppercase' }}>
-                        Online Now ({onlineOpponents.length})
-                      </div>
-                      {onlineOpponents.map((bot) => (
-                        <button
-                          key={bot.id || bot.username}
-                          onClick={() => {
-                            setCurrentOpponent(bot);
-                            setShowOpponentPicker(false);
-                          }}
-                          style={{
-                            width: '100%',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 10,
-                            padding: '7px 10px',
-                            borderRadius: 8,
-                            backgroundColor: currentOpponent.username === bot.username ? 'var(--hover)' : 'transparent',
-                            textAlign: 'left',
-                            cursor: 'pointer',
-                          }}
-                        >
-                          <div style={{ position: 'relative' }}>
-                            <div style={{ width: 30, height: 30, borderRadius: '50%', backgroundColor: 'var(--accent)', color: '#fff', display: 'grid', placeItems: 'center', fontWeight: 700, fontSize: 12 }}>
-                              {bot.displayName[0]}
-                            </div>
-                            <span
-                              style={{
-                                position: 'absolute',
-                                bottom: -1,
-                                right: -1,
-                                width: 8,
-                                height: 8,
-                                borderRadius: '50%',
-                                backgroundColor: 'var(--ok)',
-                                border: '1.5px solid var(--panel)',
-                              }}
-                            />
-                          </div>
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                              <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink)' }}>{bot.displayName}</span>
-                              <span style={{ fontSize: 10, color: 'var(--ok)', fontWeight: 600 }}>Online</span>
-                            </div>
-                            <div style={{ fontSize: 11, color: 'var(--muted)', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
-                              {bot.botPersona?.relationship || bot.bio || 'Player'}
-                            </div>
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Offline Group */}
-                  {offlineOpponents.length > 0 && (
-                    <div>
-                      <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--muted)', padding: '4px 8px', textTransform: 'uppercase' }}>
-                        Offline ({offlineOpponents.length})
-                      </div>
-                      {offlineOpponents.map((bot) => (
-                        <button
-                          key={bot.id || bot.username}
-                          onClick={() => {
-                            setCurrentOpponent(bot);
-                            setShowOpponentPicker(false);
-                          }}
-                          style={{
-                            width: '100%',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 10,
-                            padding: '7px 10px',
-                            borderRadius: 8,
-                            backgroundColor: currentOpponent.username === bot.username ? 'var(--hover)' : 'transparent',
-                            opacity: 0.8,
-                            textAlign: 'left',
-                            cursor: 'pointer',
-                          }}
-                        >
-                          <div style={{ position: 'relative' }}>
-                            <div style={{ width: 30, height: 30, borderRadius: '50%', backgroundColor: 'var(--muted)', color: '#fff', display: 'grid', placeItems: 'center', fontWeight: 700, fontSize: 12 }}>
-                              {bot.displayName[0]}
-                            </div>
-                            <span
-                              style={{
-                                position: 'absolute',
-                                bottom: -1,
-                                right: -1,
-                                width: 8,
-                                height: 8,
-                                borderRadius: '50%',
-                                backgroundColor: 'var(--muted)',
-                                border: '1.5px solid var(--panel)',
-                              }}
-                            />
-                          </div>
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                              <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--ink)' }}>{bot.displayName}</span>
-                              <span style={{ fontSize: 10, color: 'var(--muted)' }}>{getStatusLabel(bot.id)}</span>
-                            </div>
-                            <div style={{ fontSize: 11, color: 'var(--muted)', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
-                              {bot.botPersona?.relationship || bot.bio || 'Player'}
-                            </div>
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Offline notice if opponent is offline */}
-            {!isCurOnline && (
-              <div
+              <button
+                type="button"
+                disabled={!GM[lfgForm.gid]?.par}
+                onClick={() => setLfgForm((prev) => ({ ...prev, mode: 'party', need: 3 }))}
                 style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  padding: '8px 12px',
+                  flex: 1,
+                  padding: '8px 0',
                   borderRadius: 10,
-                  backgroundColor: 'rgba(235, 193, 94, 0.1)',
-                  border: '1px solid rgba(235, 193, 94, 0.25)',
-                  color: 'var(--gold)',
-                  fontSize: 12,
-                  marginBottom: 12,
-                  lineHeight: 1.4,
+                  border: '1px solid var(--line)',
+                  background: lfgForm.mode === 'party' ? 'var(--accent)' : 'var(--panel)',
+                  color: lfgForm.mode === 'party' ? 'var(--accent-ink)' : 'var(--ink)',
+                  fontWeight: 600,
+                  opacity: GM[lfgForm.gid]?.par ? 1 : 0.4,
+                  cursor: GM[lfgForm.gid]?.par ? 'pointer' : 'not-allowed',
                 }}
               >
-                <span>ℹ️</span>
-                <span>
-                  <b>{currentOpponent.displayName}</b> is currently offline ({curStatus}). Your move will be sent and they'll play their turn when back!
-                </span>
-              </div>
-            )}
-          </>
-        );
-      })()}
+                Party
+              </button>
+            </div>
 
-      {/* Head-to-Head Record Banner */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-around',
-          backgroundColor: 'var(--hover)',
-          borderRadius: 10,
-          padding: '6px 12px',
-          marginBottom: 14,
-          fontSize: 12,
-          fontWeight: 600,
-          color: 'var(--muted)',
-        }}
-      >
-        <span>
-          You: <b style={{ color: 'var(--ok)' }}>{oppStats.w}W</b>
-        </span>
-        <span>•</span>
-        <span>
-          {currentOpponent.displayName}: <b style={{ color: 'var(--vanish)' }}>{oppStats.l}W</b>
-        </span>
-        <span>•</span>
-        <span>
-          Draws: <b style={{ color: 'var(--ink)' }}>{oppStats.d}</b>
-        </span>
-      </div>
+            <div className="gch">Players Needed</div>
+            <div className="stp" style={{ margin: '8px 0 14px' }}>
+              <button
+                type="button"
+                className="outb"
+                disabled={lfgForm.mode === '1v1' || lfgForm.need <= 2}
+                onClick={() => setLfgForm((prev) => ({ ...prev, need: Math.max(2, prev.need - 1) }))}
+              >
+                −
+              </button>
+              <b>{lfgForm.need}</b>
+              <button
+                type="button"
+                className="outb"
+                disabled={lfgForm.mode === '1v1' || lfgForm.need >= 5}
+                onClick={() => setLfgForm((prev) => ({ ...prev, need: Math.min(5, prev.need + 1) }))}
+              >
+                +
+              </button>
+            </div>
 
-      {/* Game Selector Tabs */}
-      <div style={{ display: 'flex', gap: 6, marginBottom: 14, overflowX: 'auto' }}>
-        {[
-          { key: 'tictactoe', label: 'Tic-Tac-Toe' },
-          { key: 'c4', label: 'Connect 4' },
-          { key: 'rps', label: 'Rock Paper Scissors' },
-          { key: 'wordguess', label: 'Word Guess' },
-        ].map((tab) => (
-          <button
-            key={tab.key}
-            onClick={() => setSelectedGame(tab.key as any)}
-            style={{
-              flex: 1,
-              whiteSpace: 'nowrap',
-              padding: '7px 10px',
-              borderRadius: 10,
-              backgroundColor: selectedGame === tab.key ? 'var(--accent)' : 'var(--hover)',
-              color: selectedGame === tab.key ? '#fff' : 'var(--ink)',
-              fontWeight: 600,
-              fontSize: 12.5,
-              transition: 'background-color 0.15s ease',
-            }}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
+            <input
+              className="din"
+              style={{
+                width: '100%',
+                padding: '10px 14px',
+                borderRadius: 12,
+                border: '1px solid var(--line)',
+                background: 'var(--panel)',
+                color: 'var(--ink)',
+                fontSize: 14,
+                marginBottom: 12,
+              }}
+              maxLength={60}
+              placeholder="Add a note (optional)"
+              value={lfgForm.note}
+              onChange={(e) => setLfgForm((prev) => ({ ...prev, note: e.target.value }))}
+            />
 
-      {/* Opponent In-Game Banter Bubble */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-          padding: '10px 14px',
-          borderRadius: 12,
-          backgroundColor: 'var(--panel)',
-          border: '1px dashed var(--line)',
-          marginBottom: 14,
-        }}
-      >
-        <span style={{ fontSize: 18 }}>💬</span>
-        <div style={{ flex: 1, fontSize: 13, color: 'var(--ink)', fontStyle: 'italic', lineHeight: 1.35 }}>
-          <b>{currentOpponent.displayName}:</b> "{opponentBanter}"
+            <div className="lfprev">
+              <span className="lpe">🎮</span>
+              <span>
+                <b>{user?.displayName || 'You'} is looking for someone to play {GM[lfgForm.gid]?.n}.</b>
+                <small>Status: Looking for opponent</small>
+              </span>
+              <i className="postb">Join Game</i>
+            </div>
+
+            <div style={{ display: 'flex', gap: 10, marginTop: 18, justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                className="outb"
+                onClick={() => setShowLfgModal(false)}
+                style={{ padding: '8px 16px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--panel)', color: 'var(--ink)', cursor: 'pointer' }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="postb"
+                onClick={async () => {
+                  try {
+                    await api.createLFGPost({
+                      gameKey: lfgForm.gid,
+                      mode: lfgForm.mode,
+                      playersNeeded: lfgForm.need,
+                      note: lfgForm.note,
+                    });
+                    setShowLfgModal(false);
+                    loadLFG();
+                    setView('find');
+                    playTone('pop');
+                  } catch (err) {
+                    console.error('Failed to post LFG:', err);
+                  }
+                }}
+                style={{ padding: '8px 18px', borderRadius: 10, background: 'var(--accent)', color: 'var(--accent-ink)', border: 'none', fontWeight: 600, cursor: 'pointer' }}
+              >
+                Post
+              </button>
+            </div>
+          </div>
         </div>
-      </div>
-
-      {/* Game Arena Container */}
-      <div
-        style={{
-          flex: 1,
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          backgroundColor: 'var(--side)',
-          borderRadius: 16,
-          padding: 18,
-          border: '1px solid var(--line)',
-          minHeight: 320,
-        }}
-      >
-        {/* 1. TIC TAC TOE */}
-        {selectedGame === 'tictactoe' && (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
-            {/* Status & Turn */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              {winner ? (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--gold)', fontWeight: 700, fontSize: 16 }}>
-                  <Award size={20} />
-                  <span>{winner === 'Draw' ? "It's a Draw!" : `${winner} Won! 🎉`}</span>
-                </div>
-              ) : (
-                <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--ink)' }}>
-                  {turn === 'X' ? (
-                    <span>👉 Your turn (<b style={{ color: 'var(--accent)' }}>X</b>)</span>
-                  ) : (
-                    <span>
-                      ⏳ {currentOpponent.displayName} is thinking... (<b style={{ color: 'var(--gold)' }}>O</b>)
-                    </span>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Board */}
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(3, 76px)',
-                gridTemplateRows: 'repeat(3, 76px)',
-                gap: 8,
-              }}
-            >
-              {board.map((cell, idx) => (
-                <button
-                  key={idx}
-                  onClick={() => handleTicTacToeClick(idx)}
-                  disabled={!!cell || !!winner || turn !== 'X'}
-                  style={{
-                    width: 76,
-                    height: 76,
-                    borderRadius: 12,
-                    backgroundColor: 'var(--panel)',
-                    border: '1px solid var(--line)',
-                    display: 'grid',
-                    placeItems: 'center',
-                    fontSize: 32,
-                    fontWeight: 700,
-                    color: cell === 'X' ? 'var(--accent)' : cell === 'O' ? 'var(--gold)' : 'transparent',
-                    boxShadow: '0 2px 6px rgba(0,0,0,0.04)',
-                    cursor: !cell && !winner && turn === 'X' ? 'pointer' : 'default',
-                    transition: 'transform 0.1s, background-color 0.15s',
-                  }}
-                >
-                  {cell}
-                </button>
-              ))}
-            </div>
-
-            {/* Rematch */}
-            <button
-              onClick={resetTicTacToe}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-                padding: '8px 18px',
-                borderRadius: 20,
-                backgroundColor: 'var(--panel)',
-                border: '1px solid var(--line)',
-                fontSize: 13,
-                fontWeight: 600,
-                color: 'var(--ink)',
-                cursor: 'pointer',
-              }}
-            >
-              <RotateCcw size={15} />
-              <span>Rematch</span>
-            </button>
-          </div>
-        )}
-
-        {/* 2. CONNECT 4 */}
-        {selectedGame === 'c4' && (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              {c4Winner ? (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--gold)', fontWeight: 700, fontSize: 16 }}>
-                  <Award size={20} />
-                  <span>{c4Winner === 'Draw' ? "It's a Draw!" : `${c4Winner} Won Connect 4! 🎉`}</span>
-                </div>
-              ) : (
-                <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--ink)' }}>
-                  {c4Turn === 'red' ? (
-                    <span>👉 Your turn (🔴 Red)</span>
-                  ) : (
-                    <span>⏳ {currentOpponent.displayName} is dropping a disc... (🟡 Yellow)</span>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Column Drop Buttons */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 36px)', gap: 5 }}>
-              {Array.from({ length: 7 }).map((_, c) => (
-                <button
-                  key={c}
-                  onClick={() => handleC4ColumnClick(c)}
-                  disabled={!!c4Winner || c4Turn !== 'red' || !!c4Board[c]}
-                  style={{
-                    height: 28,
-                    borderRadius: 6,
-                    backgroundColor: 'var(--hover)',
-                    border: '1px solid var(--line)',
-                    display: 'grid',
-                    placeItems: 'center',
-                    fontSize: 11,
-                    fontWeight: 700,
-                    color: 'var(--accent)',
-                    cursor: !c4Winner && c4Turn === 'red' && !c4Board[c] ? 'pointer' : 'default',
-                  }}
-                >
-                  ↓
-                </button>
-              ))}
-            </div>
-
-            {/* 7x6 Board */}
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(7, 36px)',
-                gridTemplateRows: 'repeat(6, 36px)',
-                gap: 5,
-                backgroundColor: 'rgba(15, 107, 88, 0.25)',
-                padding: 8,
-                borderRadius: 14,
-                border: '1px solid var(--line)',
-              }}
-            >
-              {c4Board.map((disc, idx) => (
-                <div
-                  key={idx}
-                  style={{
-                    width: 36,
-                    height: 36,
-                    borderRadius: '50%',
-                    backgroundColor: disc === 'red' ? '#DF4B2F' : disc === 'yellow' ? '#EBC15E' : 'var(--panel)',
-                    boxShadow: disc ? 'inset 0 2px 4px rgba(0,0,0,0.2)' : 'none',
-                    border: '1px solid var(--line)',
-                  }}
-                />
-              ))}
-            </div>
-
-            <button
-              onClick={() => {
-                setC4Board(Array(42).fill(null));
-                setC4Turn('red');
-                setC4Winner(null);
-                setOpponentBanter("New Connect 4 board! Drop your first disc.");
-              }}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-                padding: '8px 18px',
-                borderRadius: 20,
-                backgroundColor: 'var(--panel)',
-                border: '1px solid var(--line)',
-                fontSize: 13,
-                fontWeight: 600,
-                color: 'var(--ink)',
-                cursor: 'pointer',
-              }}
-            >
-              <RotateCcw size={15} />
-              <span>Reset Game</span>
-            </button>
-          </div>
-        )}
-
-        {/* 3. ROCK PAPER SCISSORS */}
-        {selectedGame === 'rps' && (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16, width: '100%', maxWidth: 320 }}>
-            <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--ink)', textAlign: 'center' }}>
-              Best of 3 Duel vs {currentOpponent.displayName}
-            </div>
-
-            {/* Score tally */}
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'center',
-                gap: 20,
-                fontSize: 16,
-                fontWeight: 700,
-                color: 'var(--ink)',
-              }}
-            >
-              <span>You: <b style={{ color: 'var(--ok)' }}>{rpsRounds.filter((r) => r.winner === 'user').length}</b></span>
-              <span>•</span>
-              <span>{currentOpponent.displayName}: <b style={{ color: 'var(--vanish)' }}>{rpsRounds.filter((r) => r.winner === 'opponent').length}</b></span>
-            </div>
-
-            {/* Buttons */}
-            <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
-              {[
-                { key: 'rock', emoji: '✊', label: 'Rock' },
-                { key: 'paper', emoji: '✋', label: 'Paper' },
-                { key: 'scissors', emoji: '✌️', label: 'Scissors' },
-              ].map((item) => (
-                <button
-                  key={item.key}
-                  onClick={() => handleRpsPick(item.key as any)}
-                  disabled={!!rpsStatus}
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    gap: 6,
-                    padding: '12px 18px',
-                    borderRadius: 14,
-                    backgroundColor: 'var(--panel)',
-                    border: '1px solid var(--line)',
-                    cursor: !rpsStatus ? 'pointer' : 'default',
-                    boxShadow: '0 2px 6px rgba(0,0,0,0.05)',
-                  }}
-                >
-                  <span style={{ fontSize: 30 }}>{item.emoji}</span>
-                  <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink)' }}>{item.label}</span>
-                </button>
-              ))}
-            </div>
-
-            {/* Round History */}
-            {rpsRounds.length > 0 && (
-              <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {rpsRounds.map((r, i) => (
-                  <div
-                    key={i}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      padding: '6px 12px',
-                      borderRadius: 8,
-                      backgroundColor: 'var(--panel)',
-                      fontSize: 13,
-                    }}
-                  >
-                    <span>Round {i + 1}: You ({r.user}) vs {currentOpponent.displayName} ({r.opp})</span>
-                    <b style={{ color: r.winner === 'user' ? 'var(--ok)' : r.winner === 'opponent' ? 'var(--vanish)' : 'var(--muted)' }}>
-                      {r.winner === 'user' ? 'You Won' : r.winner === 'opponent' ? 'They Won' : 'Draw'}
-                    </b>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {rpsStatus && (
-              <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 16, color: 'var(--gold)' }}>
-                {rpsStatus}
-              </div>
-            )}
-
-            <button
-              onClick={() => {
-                setRpsRounds([]);
-                setRpsStatus(null);
-                setOpponentBanter("Rock, paper, scissors — shoot!");
-              }}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-                padding: '8px 18px',
-                borderRadius: 20,
-                backgroundColor: 'var(--panel)',
-                border: '1px solid var(--line)',
-                fontSize: 13,
-                fontWeight: 600,
-                color: 'var(--ink)',
-                cursor: 'pointer',
-              }}
-            >
-              <RotateCcw size={15} />
-              <span>New Match</span>
-            </button>
-          </div>
-        )}
-
-        {/* 4. WORD GUESS */}
-        {selectedGame === 'wordguess' && (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, width: '100%', maxWidth: 320 }}>
-            <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--ink)' }}>
-              Guess the 5-letter word ({6 - wordGuesses.length} tries left)
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {Array.from({ length: 6 }).map((_, rowIdx) => {
-                const guess = wordGuesses[rowIdx] || (rowIdx === wordGuesses.length ? currentGuess.padEnd(5, ' ') : '     ');
-
-                return (
-                  <div key={rowIdx} style={{ display: 'flex', gap: 6 }}>
-                    {Array.from({ length: 5 }).map((_, colIdx) => {
-                      const letter = guess[colIdx] || '';
-                      const isSubmitted = rowIdx < wordGuesses.length;
-                      let bg = 'var(--panel)';
-                      let color = 'var(--ink)';
-
-                      if (isSubmitted) {
-                        if (targetWord[colIdx] === letter) {
-                          bg = 'var(--ok)';
-                          color = '#fff';
-                        } else if (targetWord.includes(letter)) {
-                          bg = 'var(--gold)';
-                          color = '#fff';
-                        } else {
-                          bg = 'var(--muted)';
-                          color = '#fff';
-                        }
-                      }
-
-                      return (
-                        <div
-                          key={colIdx}
-                          style={{
-                            width: 44,
-                            height: 44,
-                            borderRadius: 8,
-                            backgroundColor: bg,
-                            border: isSubmitted ? 'none' : '1px solid var(--line)',
-                            color,
-                            display: 'grid',
-                            placeItems: 'center',
-                            fontSize: 18,
-                            fontWeight: 700,
-                          }}
-                        >
-                          {letter.trim()}
-                        </div>
-                      );
-                    })}
-                  </div>
-                );
-              })}
-            </div>
-
-            {wordStatus === 'playing' ? (
-              <form onSubmit={handleWordSubmit} style={{ display: 'flex', gap: 8, width: '100%' }}>
-                <input
-                  type="text"
-                  maxLength={5}
-                  placeholder="5 letters"
-                  value={currentGuess}
-                  onChange={(e) => setCurrentGuess(e.target.value.toUpperCase())}
-                  style={{
-                    flex: 1,
-                    padding: '8px 12px',
-                    borderRadius: 8,
-                    backgroundColor: 'var(--panel)',
-                    border: '1px solid var(--line)',
-                    textTransform: 'uppercase',
-                    fontWeight: 600,
-                    fontSize: 15,
-                    textAlign: 'center',
-                    letterSpacing: 2,
-                    color: 'var(--ink)',
-                  }}
-                />
-                <button
-                  type="submit"
-                  disabled={currentGuess.length !== 5}
-                  style={{
-                    padding: '8px 16px',
-                    borderRadius: 8,
-                    backgroundColor: currentGuess.length === 5 ? 'var(--accent)' : 'var(--hover)',
-                    color: currentGuess.length === 5 ? '#fff' : 'var(--muted)',
-                    fontWeight: 600,
-                    fontSize: 13,
-                    cursor: currentGuess.length === 5 ? 'pointer' : 'default',
-                  }}
-                >
-                  Guess
-                </button>
-              </form>
-            ) : (
-              <div style={{ textAlign: 'center', color: wordStatus === 'won' ? 'var(--ok)' : 'var(--vanish)', fontWeight: 700, fontSize: 15 }}>
-                {wordStatus === 'won' ? '🎉 Brilliant! You cracked it!' : `Game Over! The word was ${targetWord}.`}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
+      )}
     </div>
   );
 };
