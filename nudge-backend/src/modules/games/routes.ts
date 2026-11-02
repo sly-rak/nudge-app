@@ -150,12 +150,20 @@ export const gameRoutes: FastifyPluginAsync = async (fastify) => {
       );
 
       const senderRes = await query('SELECT display_name as "displayName" FROM users WHERE id = $1', [decoded.id]);
+      const row = gameMsg.rows[0];
       await realtimeGateway.broadcastToConversation(conversationId, {
         t: 'message.new',
         d: {
           conversationId,
           message: {
-            ...gameMsg.rows[0],
+            id: row.id,
+            conversationId: row.conversation_id,
+            roomId: row.room_id,
+            seq: row.seq,
+            senderId: row.sender_id,
+            type: row.type,
+            body: row.body,
+            createdAt: row.created_at,
             sender: { id: decoded.id, displayName: senderRes.rows[0]?.displayName || 'Player' },
             reactions: [],
           },

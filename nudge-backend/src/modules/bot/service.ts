@@ -514,7 +514,7 @@ export class BotService {
                 username: bot.username,
                 displayName: bot.displayName,
                 avatarUrl: bot.avatarUrl,
-                avatarKind: bot.avatarKind,
+                avatarKind: bot.avatarKind as any,
               },
               reactions: [],
             };
@@ -571,7 +571,7 @@ export class BotService {
                     username: bot.username,
                     displayName: bot.displayName,
                     avatarUrl: bot.avatarUrl,
-                    avatarKind: bot.avatarKind,
+                    avatarKind: bot.avatarKind as any,
                   },
                   reactions: [],
                 };
@@ -780,7 +780,7 @@ export class BotService {
                     type: endRow.type,
                     body: endRow.body,
                     createdAt: endRow.created_at,
-                    sender: { id: botUserId, displayName: botName },
+                    sender: { id: botUserId || undefined, displayName: botName },
                     reactions: [],
                   };
 

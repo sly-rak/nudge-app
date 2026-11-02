@@ -114,7 +114,7 @@ export interface Message {
   vanishAfterRead?: boolean;
   createdAt: string;
   reactions?: MessageReaction[];
-  sender?: User;
+  sender?: Partial<User>;
 }
 
 export interface StoryPollOption {
@@ -177,7 +177,7 @@ export interface BotMemory {
 
 export interface GameSession {
   id: string;
-  gameKey: 'tictactoe' | 'connect4' | 'wordguess';
+  gameKey: 'tictactoe' | 'connect4' | 'wordguess' | 'rps' | string;
   conversationId?: string;
   status: 'waiting' | 'in_progress' | 'completed' | 'abandoned';
   state: Record<string, any>;

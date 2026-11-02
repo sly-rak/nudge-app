@@ -9,7 +9,8 @@ export const pool = new Pool({
     rejectUnauthorized: false,
   },
   max: 10,
-  idleTimeoutMillis: 30000,
+  idleTimeoutMillis: 15000,
+  connectionTimeoutMillis: 10000,
 });
 
 pool.on('error', (err) => {
@@ -18,10 +19,19 @@ pool.on('error', (err) => {
 
 export async function query<T extends pg.QueryResultRow = any>(text: string, params?: any[]): Promise<pg.QueryResult<T>> {
   const start = Date.now();
-  const res = await pool.query<T>(text, params);
-  const duration = Date.now() - start;
-  if (config.nodeEnv === 'development' && duration > 100) {
-    console.log('Executed query', { text: text.slice(0, 100), duration, rows: res.rowCount });
+  try {
+    const res = await pool.query<T>(text, params);
+    const duration = Date.now() - start;
+    if (config.nodeEnv === 'development' && duration > 100) {
+      console.log('Executed query', { text: text.slice(0, 100), duration, rows: res.rowCount });
+    }
+    return res;
+  } catch (err: any) {
+    if (err?.code === 'ECONNRESET' || err?.message?.includes('Connection terminated') || err?.message?.includes('closed')) {
+      console.warn('[DB] Connection reset detected, retrying query once...', err.message);
+      const res = await pool.query<T>(text, params);
+      return res;
+    }
+    throw err;
   }
-  return res;
 }

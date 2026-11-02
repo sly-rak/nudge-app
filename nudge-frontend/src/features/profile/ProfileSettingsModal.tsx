@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext.js';
+import { useTheme } from '../../context/ThemeContext.js';
 import { DownForStatus } from '@nudge/shared';
 import { X, Check, Shield, Bell, Moon, Sun, LogOut, Flame, MessageSquare, Gamepad2, Users, Sparkles } from 'lucide-react';
 import { Avatar } from '../../components/Avatar.js';
@@ -18,12 +19,10 @@ const DOWN_FOR_OPTIONS: { key: DownForStatus; label: string; desc: string; emoji
 
 export const ProfileSettingsModal: React.FC<ProfileSettingsModalProps> = ({ onClose, isEmbedded = false }) => {
   const { user, updateStatus, logout, demoAccounts, switchUser } = useAuth();
+  const { theme, toggleTheme } = useTheme();
   const [selectedDownFor, setSelectedDownFor] = useState<DownForStatus>(user?.status?.downFor || 'talk');
   const [statusText, setStatusText] = useState(user?.status?.text || '');
   const [isSaving, setIsSaving] = useState(false);
-  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
-    return (localStorage.getItem('nudge_theme') as 'light' | 'dark') || 'light';
-  });
 
   const handleSaveStatus = async () => {
     setIsSaving(true);
@@ -38,13 +37,6 @@ export const ProfileSettingsModal: React.FC<ProfileSettingsModalProps> = ({ onCl
     } finally {
       setIsSaving(false);
     }
-  };
-
-  const toggleTheme = () => {
-    const nextTheme = theme === 'light' ? 'dark' : 'light';
-    setTheme(nextTheme);
-    localStorage.setItem('nudge_theme', nextTheme);
-    document.documentElement.setAttribute('data-theme', nextTheme);
   };
 
   const content = (

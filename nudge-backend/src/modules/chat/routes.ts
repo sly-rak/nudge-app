@@ -31,62 +31,91 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
       [decoded.id]
     );
 
-    const conversations = [];
+    if (convsRes.rows.length === 0) {
+      return { conversations: [] };
+    }
 
-    for (const conv of convsRes.rows) {
-      // Get members
-      const membersRes = await query(
-        `SELECT cm.user_id as "userId", cm.role,
+    const convIds = convsRes.rows.map((c) => c.id);
+
+    const [membersRes, roomsRes, lastMsgRes] = await Promise.all([
+      query(
+        `SELECT cm.conversation_id as "conversationId", cm.user_id as "userId", cm.role,
                 u.username, u.display_name as "displayName", u.avatar_url as "avatarUrl",
                 u.avatar_kind as "avatarKind", u.is_bot as "isBot", s.down_for as "downFor", s.text as "statusText"
          FROM conversation_members cm
          JOIN users u ON cm.user_id = u.id
          LEFT JOIN user_status s ON u.id = s.user_id
-         WHERE cm.conversation_id = $1`,
-        [conv.id]
-      );
-
-      // Get rooms for this conversation
-      const roomsRes = await query(
+         WHERE cm.conversation_id = ANY($1)`,
+        [convIds]
+      ),
+      query(
         `SELECT id, conversation_id as "conversationId", name, emoji, admin_only as "adminOnly",
                 archived, created_at as "createdAt"
          FROM rooms
-         WHERE conversation_id = $1
+         WHERE conversation_id = ANY($1)
          ORDER BY created_at ASC`,
-        [conv.id]
-      );
-
-      // Get last message
-      const lastMsgRes = await query(
-        `SELECT m.id, m.seq, m.sender_id as "senderId", m.type, m.body, m.media_url as "mediaUrl",
+        [convIds]
+      ),
+      query(
+        `SELECT DISTINCT ON (m.conversation_id)
+                m.id, m.conversation_id as "conversationId", m.seq, m.sender_id as "senderId", m.type, m.body, m.media_url as "mediaUrl",
                 m.room_id as "roomId", m.created_at as "createdAt", u.display_name as "senderName"
          FROM messages m
          JOIN users u ON m.sender_id = u.id
-         WHERE m.conversation_id = $1
-         ORDER BY m.seq DESC LIMIT 1`,
-        [conv.id]
-      );
+         WHERE m.conversation_id = ANY($1)
+         ORDER BY m.conversation_id, m.seq DESC`,
+        [convIds]
+      ),
+    ]);
 
-      // If direct conversation, adjust title and avatar to other user
+    const membersByConv = new Map<string, any[]>();
+    for (const m of membersRes.rows) {
+      if (!membersByConv.has(m.conversationId)) membersByConv.set(m.conversationId, []);
+      membersByConv.get(m.conversationId)!.push(m);
+    }
+
+    const roomsByConv = new Map<string, any[]>();
+    for (const r of roomsRes.rows) {
+      if (!roomsByConv.has(r.conversationId)) roomsByConv.set(r.conversationId, []);
+      roomsByConv.get(r.conversationId)!.push(r);
+    }
+
+    const lastMsgByConv = new Map<string, any>();
+    for (const msg of lastMsgRes.rows) {
+      lastMsgByConv.set(msg.conversationId, msg);
+    }
+
+    const conversations = convsRes.rows.map((conv) => {
+      const members = membersByConv.get(conv.id) || [];
+      const rooms = roomsByConv.get(conv.id) || [];
+      const lastMessage = lastMsgByConv.get(conv.id) || null;
+
+      let title = conv.title;
+      let avatarUrl = conv.avatarUrl;
+      let otherUser = undefined;
+
       if (conv.type === 'direct') {
-        const otherMember = membersRes.rows.find((m) => m.userId !== decoded.id);
+        const otherMember = members.find((m) => m.userId !== decoded.id);
         if (otherMember) {
-          conv.title = otherMember.displayName;
-          conv.avatarUrl = otherMember.avatarUrl;
-          conv.otherUser = otherMember;
+          title = otherMember.displayName;
+          avatarUrl = otherMember.avatarUrl;
+          otherUser = otherMember;
         }
       }
 
       const unreadCount = Math.max(0, conv.lastSeq - (conv.lastReadSeq || 0));
 
-      conversations.push({
+      return {
         ...conv,
-        members: membersRes.rows,
-        rooms: roomsRes.rows,
-        lastMessage: lastMsgRes.rows[0] || null,
+        title,
+        avatarUrl,
+        otherUser,
+        members,
+        rooms,
+        lastMessage,
         unreadCount,
-      });
-    }
+      };
+    });
 
     return { conversations };
   });
