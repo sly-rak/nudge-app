@@ -219,6 +219,60 @@ class ApiClient {
     });
   }
 
+  async updateRoom(conversationId: string, roomId: string, data: { name?: string; emoji?: string; adminOnly?: boolean; archived?: boolean }) {
+    return this.request<{ room: Room }>(`/conversations/${conversationId}/rooms/${roomId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteRoom(conversationId: string, roomId: string) {
+    return this.request<{ success: boolean }>(`/conversations/${conversationId}/rooms/${roomId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async updateGroup(conversationId: string, data: { title?: string }) {
+    return this.request<{ success: boolean; title?: string }>(`/conversations/${conversationId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateGroupPermissions(conversationId: string, permissions: { info?: boolean; send?: boolean; add?: boolean }) {
+    return this.request<{ success: boolean; permissions: any }>(`/conversations/${conversationId}/permissions`, {
+      method: 'PATCH',
+      body: JSON.stringify({ permissions }),
+    });
+  }
+
+  async updateChatTheme(conversationId: string, data: { customTheme: any; isShared?: boolean }) {
+    return this.request<{ success: boolean; customTheme: any }>(`/conversations/${conversationId}/theme`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async addMember(conversationId: string, userId: string, role: string = 'member') {
+    return this.request<{ success: boolean }>(`/conversations/${conversationId}/members`, {
+      method: 'POST',
+      body: JSON.stringify({ userId, role }),
+    });
+  }
+
+  async updateMemberRole(conversationId: string, userId: string, role: string) {
+    return this.request<{ success: boolean; userId: string; role: string }>(`/conversations/${conversationId}/members/${userId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ role }),
+    });
+  }
+
+  async removeMember(conversationId: string, userId: string) {
+    return this.request<{ success: boolean; userId: string }>(`/conversations/${conversationId}/members/${userId}`, {
+      method: 'DELETE',
+    });
+  }
+
   async updateExpiration(conversationId: string, endsAt: string | null) {
     return this.request<{ conversation: any }>(`/conversations/${conversationId}/expiration`, {
       method: 'PATCH',

@@ -73,7 +73,8 @@ export interface Conversation {
   rooms?: Room[];
   activeRoomId?: string;
   members?: ConversationMember[];
-  customTheme?: { accent?: string; wallpaper?: string; tone?: string };
+  permissions?: { info?: boolean; send?: boolean; add?: boolean };
+  customTheme?: { accent?: string; wallpaper?: any; tone?: string; dim?: number; isShared?: boolean };
 }
 
 export interface ConversationMember {

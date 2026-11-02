@@ -20,6 +20,7 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
       `SELECT c.id, c.type, c.title, c.avatar_url as "avatarUrl", c.last_seq as "lastSeq",
               c.last_message_at as "lastMessageAt", c.created_at as "createdAt",
               c.ends_at as "endsAt", c.archived_at as "archivedAt",
+              c.custom_theme as "customTheme", c.permissions as "permissions",
               (cm.pinned_at IS NOT NULL) as "isPinned",
               (cm.archived_at IS NOT NULL OR c.archived_at IS NOT NULL) as "isArchived",
               cm.disappearing_seconds as "disappearingSeconds",
@@ -335,11 +336,42 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
     const { body, type = 'text', mediaUrl, mediaMetadata, replyToId, clientMsgId, roomId, vanishSeconds } = request.body as any;
 
     const memCheck = await query(
-      'SELECT 1 FROM conversation_members WHERE conversation_id = $1 AND user_id = $2',
+      'SELECT role FROM conversation_members WHERE conversation_id = $1 AND user_id = $2',
       [id, decoded.id]
     );
     if (memCheck.rowCount === 0) {
       return reply.status(403).send({ error: { code: 'FORBIDDEN', message: 'Not a member' } });
+    }
+
+    const userRole = memCheck.rows[0]?.role;
+    const isConvAdmin = ['owner', 'admin'].includes(userRole);
+
+    const convCheck = await query(
+      'SELECT type, archived_at, permissions FROM conversations WHERE id = $1',
+      [id]
+    );
+    if (convCheck.rowCount && convCheck.rowCount > 0) {
+      const conv = convCheck.rows[0];
+      if (conv.archived_at) {
+        return reply.status(403).send({ error: { code: 'FORBIDDEN', message: 'This group has ended and is archived. Messages are kept.' } });
+      }
+      const perms = conv.permissions || {};
+      if (conv.type === 'group' && perms.send && !isConvAdmin) {
+        return reply.status(403).send({ error: { code: 'FORBIDDEN', message: 'Only admins can send messages in this group.' } });
+      }
+    }
+
+    if (roomId) {
+      const roomCheck = await query('SELECT name, emoji, admin_only, archived FROM rooms WHERE id = $1 AND conversation_id = $2', [roomId, id]);
+      if (roomCheck.rowCount && roomCheck.rowCount > 0) {
+        const room = roomCheck.rows[0];
+        if (room.archived) {
+          return reply.status(403).send({ error: { code: 'FORBIDDEN', message: 'This room is archived and read-only.' } });
+        }
+        if (room.admin_only && !isConvAdmin) {
+          return reply.status(403).send({ error: { code: 'FORBIDDEN', message: `Only admins can post in #${room.name}.` } });
+        }
+      }
     }
 
     const convResult = await query(
@@ -461,6 +493,155 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
     );
 
     return { room: res.rows[0] };
+  });
+
+  // Delete room
+  fastify.delete('/:id/rooms/:roomId', async (request, reply) => {
+    const decoded = request.user as { id: string };
+    const { id, roomId } = request.params as { id: string; roomId: string };
+
+    const memberRes = await query(
+      'SELECT role FROM conversation_members WHERE conversation_id = $1 AND user_id = $2',
+      [id, decoded.id]
+    );
+    if (memberRes.rowCount === 0 || !['owner', 'admin'].includes(memberRes.rows[0].role)) {
+      return reply.status(403).send({ error: { code: 'FORBIDDEN', message: 'Only admins can delete rooms' } });
+    }
+
+    // Delete messages in this room
+    await query('DELETE FROM messages WHERE conversation_id = $1 AND room_id = $2', [id, roomId]);
+    // Delete room
+    await query('DELETE FROM rooms WHERE id = $1 AND conversation_id = $2', [roomId, id]);
+
+    return { success: true };
+  });
+
+  // Update group details (e.g. title)
+  fastify.patch('/:id', async (request, reply) => {
+    const decoded = request.user as { id: string };
+    const { id } = request.params as { id: string };
+    const { title } = request.body as any;
+
+    const convRes = await query('SELECT type, permissions FROM conversations WHERE id = $1', [id]);
+    if (convRes.rowCount === 0) {
+      return reply.status(404).send({ error: { code: 'NOT_FOUND', message: 'Conversation not found' } });
+    }
+
+    const memberRes = await query(
+      'SELECT role FROM conversation_members WHERE conversation_id = $1 AND user_id = $2',
+      [id, decoded.id]
+    );
+    if (memberRes.rowCount === 0) {
+      return reply.status(403).send({ error: { code: 'FORBIDDEN', message: 'Not a member' } });
+    }
+
+    const isAdmin = ['owner', 'admin'].includes(memberRes.rows[0].role);
+    const perms = convRes.rows[0].permissions || {};
+
+    if (perms.info && !isAdmin) {
+      return reply.status(403).send({ error: { code: 'FORBIDDEN', message: 'Only admins edit group info' } });
+    }
+
+    if (title !== undefined) {
+      await query('UPDATE conversations SET title = $2 WHERE id = $1', [id, title]);
+    }
+
+    return { success: true, title };
+  });
+
+  // Update group permissions (info, send, add)
+  fastify.patch('/:id/permissions', async (request, reply) => {
+    const decoded = request.user as { id: string };
+    const { id } = request.params as { id: string };
+    const { permissions } = request.body as any;
+
+    const memberRes = await query(
+      'SELECT role FROM conversation_members WHERE conversation_id = $1 AND user_id = $2',
+      [id, decoded.id]
+    );
+    if (memberRes.rowCount === 0 || !['owner', 'admin'].includes(memberRes.rows[0].role)) {
+      return reply.status(403).send({ error: { code: 'FORBIDDEN', message: 'Only admins can change permissions' } });
+    }
+
+    await query(
+      'UPDATE conversations SET permissions = $2 WHERE id = $1',
+      [id, JSON.stringify(permissions || {})]
+    );
+
+    return { success: true, permissions };
+  });
+
+  // Update chat appearance theme (accent, wallpaper, tone, dim)
+  fastify.patch('/:id/theme', async (request, reply) => {
+    const decoded = request.user as { id: string };
+    const { id } = request.params as { id: string };
+    const { customTheme, isShared } = request.body as any;
+
+    if (isShared) {
+      const memberRes = await query(
+        'SELECT role FROM conversation_members WHERE conversation_id = $1 AND user_id = $2',
+        [id, decoded.id]
+      );
+      if (memberRes.rowCount === 0 || !['owner', 'admin'].includes(memberRes.rows[0].role)) {
+        return reply.status(403).send({ error: { code: 'FORBIDDEN', message: 'Only admins can set group theme' } });
+      }
+      await query('UPDATE conversations SET custom_theme = $2 WHERE id = $1', [id, JSON.stringify(customTheme)]);
+    } else {
+      await query(
+        'UPDATE conversation_members SET custom_theme = $3 WHERE conversation_id = $1 AND user_id = $2',
+        [id, decoded.id, JSON.stringify(customTheme)]
+      );
+    }
+
+    return { success: true, customTheme };
+  });
+
+  // Member Management: Promote / Demote
+  fastify.patch('/:id/members/:userId', async (request, reply) => {
+    const decoded = request.user as { id: string };
+    const { id, userId } = request.params as { id: string; userId: string };
+    const { role } = request.body as any;
+
+    const currentMemberRes = await query(
+      'SELECT role FROM conversation_members WHERE conversation_id = $1 AND user_id = $2',
+      [id, decoded.id]
+    );
+    if (currentMemberRes.rowCount === 0 || !['owner', 'admin'].includes(currentMemberRes.rows[0].role)) {
+      return reply.status(403).send({ error: { code: 'FORBIDDEN', message: 'Only admins can change member roles' } });
+    }
+
+    await query(
+      'UPDATE conversation_members SET role = $3 WHERE conversation_id = $1 AND user_id = $2',
+      [id, userId, role]
+    );
+
+    return { success: true, userId, role };
+  });
+
+  // Member Management: Remove Member
+  fastify.delete('/:id/members/:userId', async (request, reply) => {
+    const decoded = request.user as { id: string };
+    const { id, userId } = request.params as { id: string; userId: string };
+
+    const currentMemberRes = await query(
+      'SELECT role FROM conversation_members WHERE conversation_id = $1 AND user_id = $2',
+      [id, decoded.id]
+    );
+    if (currentMemberRes.rowCount === 0) {
+      return reply.status(403).send({ error: { code: 'FORBIDDEN', message: 'Not a member' } });
+    }
+
+    const isAdmin = ['owner', 'admin'].includes(currentMemberRes.rows[0].role);
+    if (decoded.id !== userId && !isAdmin) {
+      return reply.status(403).send({ error: { code: 'FORBIDDEN', message: 'Only admins can remove members' } });
+    }
+
+    await query(
+      'DELETE FROM conversation_members WHERE conversation_id = $1 AND user_id = $2',
+      [id, userId]
+    );
+
+    return { success: true, userId };
   });
 
   // Update/Archive room

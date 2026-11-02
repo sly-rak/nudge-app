@@ -37,9 +37,62 @@ import {
   Film,
   Link as LinkIcon,
   Volume2,
+  Lock,
+  Sliders,
+  Palette,
+  UserPlus,
+  Users,
+  Shield,
+  Edit3,
+  Check,
 } from 'lucide-react';
 import { Avatar } from '../../components/Avatar.js';
 import { StatusChip } from '../../components/StatusChip.js';
+
+const REMO = ['💬', '📚', '🎉', '📸', '💰', '🎮', '🍔', '⚽', '🎵', '💻', '🚗', '🙏'];
+
+const ACC_PRESETS = [
+  '#0F6B58', // Spruce Green
+  '#3B4CF2', // Classic Blue
+  '#E63946', // Crimson
+  '#F77F00', // Amber
+  '#7209B7', // Purple
+  '#3A86FF', // Sky
+  '#06D6A0', // Teal
+  '#1B1B1F', // Midnight
+];
+
+const WP_SOLIDS = ['#f5f5f7', '#1c1917', '#0f172a'];
+const WP_GRADS = [
+  'linear-gradient(160deg, #667eea, #764ba2)',
+  'linear-gradient(160deg, #f093fb, #f5576c)',
+  'linear-gradient(160deg, #4facfe, #00f2fe)',
+];
+const WP_PATS = [
+  { id: 'dots', name: 'Dots', css: 'radial-gradient(circle, var(--line) 1px, transparent 1px) 0 0/16px 16px' },
+  { id: 'grid', name: 'Grid', css: 'linear-gradient(to right, var(--line) 1px, transparent 1px) 0 0/20px 20px, linear-gradient(to bottom, var(--line) 1px, transparent 1px) 0 0/20px 20px' },
+  { id: 'diamonds', name: 'Diamonds', css: 'repeating-linear-gradient(45deg, transparent, transparent 10px, var(--hover) 10px, var(--hover) 20px)' },
+];
+const SOUND_PRESETS = ['chime', 'bell', 'pop', 'marimba', 'drop', 'silent'];
+
+function untilShort(ms: number) {
+  const d = ms - Date.now();
+  if (d <= 0) return 'Ended';
+  if (d < 60000) return '<1m';
+  if (d < 3600000) return Math.ceil(d / 60000) + 'm';
+  if (d < 48 * 3600000) return Math.ceil(d / 3600000) + 'h';
+  return Math.ceil(d / 86400000) + 'd';
+}
+
+function untilLong(ms: number) {
+  const d = ms - Date.now();
+  if (d <= 0) return 'ended';
+  if (d < 60000) return 'less than a minute';
+  const hours = Math.ceil(d / 3600000);
+  if (hours < 24) return `${hours} hour${hours > 1 ? 's' : ''}`;
+  const days = Math.ceil(d / 86400000);
+  return `${days} day${days > 1 ? 's' : ''}`;
+}
 
 interface ChatThreadProps {
   conversation: Conversation;
@@ -124,7 +177,50 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
   // Pinned message
   const [pinnedMessageId, setPinnedMessageId] = useState<string | null>(conversation.pinnedMessageId || null);
 
-  // Modals & Panels
+  // Batch 2: Group Rooms, Admin Permissions, Temp Groups & Customization
+  const [showGroupModal, setShowGroupModal] = useState(false);
+  const [showAddMemberModal, setShowAddMemberModal] = useState(false);
+  const [showRoomsModal, setShowRoomsModal] = useState(false);
+  const [showRoomEditModal, setShowRoomEditModal] = useState(false);
+  const [editingRoom, setEditingRoom] = useState<Room | null>(null);
+  const [showExpiryModal, setShowExpiryModal] = useState(false);
+  const [showCustSheet, setShowCustSheet] = useState(false);
+
+  // Drafts & unreads per room
+  const [roomDrafts, setRoomDrafts] = useState<Record<string, string>>({});
+  const [roomUnreads, setRoomUnreads] = useState<Record<string, number>>({});
+
+  // Appearance / Custom Theme Look
+  const [customLook, setCustomLook] = useState<{
+    accent?: string;
+    wallpaper?: { type: string; value: string };
+    tone?: string;
+    dim?: number;
+    isShared?: boolean;
+  }>({
+    accent: conversation.customTheme?.accent || '',
+    wallpaper: conversation.customTheme?.wallpaper || { type: 'none', value: '' },
+    tone: conversation.customTheme?.tone || 'chime',
+    dim: conversation.customTheme?.dim || 0,
+    isShared: Boolean(conversation.customTheme?.isShared),
+  });
+
+  // Group Details & Permissions state
+  const [groupTitleEdit, setGroupTitleEdit] = useState(conversation.title || '');
+  const [groupPerms, setGroupPerms] = useState<{ info?: boolean; send?: boolean; add?: boolean }>(
+    conversation.permissions || { info: false, send: false, add: false }
+  );
+  const [availableContacts, setAvailableContacts] = useState<any[]>([]);
+  const [selectedAddMemberIds, setSelectedAddMemberIds] = useState<Set<string>>(new Set());
+
+  // Room Edit Form State
+  const [editRoomName, setEditRoomName] = useState('');
+  const [editRoomEmoji, setEditRoomEmoji] = useState('💬');
+  const [editRoomAdminOnly, setEditRoomAdminOnly] = useState(false);
+
+  // Temporary Group Expiration State
+  const [expiryOption, setExpiryOption] = useState<'none' | '1h' | '24h' | '7d' | '30d' | 'custom'>('none');
+  const [expiryCustomDate, setExpiryCustomDate] = useState('');
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [showEmojiPanel, setShowEmojiPanel] = useState(false);
   const [activePanelTab, setActivePanelTab] = useState<'emoji' | 'gif' | 'sticker'>('emoji');
@@ -216,6 +312,11 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
     const unsubNew = wsClient.on('message.new', (data: { conversationId: string; roomId?: string; message: Message }) => {
       if (data.conversationId === conversation.id) {
         if (activeRoomId && data.roomId && data.roomId !== activeRoomId) {
+          setRoomUnreads((prev) => ({
+            ...prev,
+            [data.roomId!]: (prev[data.roomId!] || 0) + 1,
+          }));
+          playTone(customLook.tone || 'chime');
           return;
         }
 
@@ -697,6 +798,254 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
     }
   };
 
+  // Batch 2: Helper Functions & Permission Checks
+  const currentMember = conversation.members?.find((m) => m.userId === user?.id || (m as any).id === user?.id);
+  const isOwner = currentMember?.role === 'owner';
+  const isAdmin = isOwner || currentMember?.role === 'admin';
+  const canAdd = isAdmin || !groupPerms.add;
+  const canEditInfo = isAdmin || !groupPerms.info;
+
+  const getRoomLock = () => {
+    if (conversation.archivedAt || conversation.isArchived) {
+      return 'This group has ended and is archived. Messages are kept.';
+    }
+    if (conversation.type === 'group' && groupPerms.send && !isAdmin) {
+      return 'Only admins can send messages in this group.';
+    }
+    const curR = conversation.rooms?.find((r) => r.id === (activeRoomId || 'general'));
+    if (curR) {
+      if (curR.archived) {
+        return 'This room is archived and read-only.';
+      }
+      if (curR.adminOnly && !isAdmin) {
+        return `Only admins can post in #${curR.name}.`;
+      }
+    }
+    return '';
+  };
+  const lockMessage = getRoomLock();
+
+  const handleSwitchRoom = (roomId: string) => {
+    if (activeRoomId === roomId) return;
+    if (activeRoomId) {
+      setRoomDrafts((prev) => ({ ...prev, [activeRoomId]: inputValue }));
+    }
+    setActiveRoomId(roomId);
+    setInputValue(roomDrafts[roomId] || '');
+    setRoomUnreads((prev) => ({ ...prev, [roomId]: 0 }));
+    api.getMessages(conversation.id, roomId).then((res: any) => {
+      setMessages(res.messages || []);
+      scrollToBottom();
+    });
+  };
+
+  const handleSaveRoom = async () => {
+    if (!editRoomName.trim()) return;
+    const cleanName = editRoomName.trim().replace(/^#/, '');
+    try {
+      if (editingRoom) {
+        const res = await api.updateRoom(conversation.id, editingRoom.id, {
+          name: cleanName,
+          emoji: editRoomEmoji,
+          adminOnly: editRoomAdminOnly,
+        });
+        if (res.room) {
+          conversation.rooms = (conversation.rooms || []).map((r) =>
+            r.id === res.room.id ? res.room : r
+          );
+        }
+      } else {
+        const res = await api.addRoom(conversation.id, {
+          name: cleanName,
+          emoji: editRoomEmoji,
+          adminOnly: editRoomAdminOnly,
+        });
+        if (res.room) {
+          conversation.rooms = [...(conversation.rooms || []), res.room];
+          setActiveRoomId(res.room.id);
+        }
+      }
+      setShowRoomEditModal(false);
+      setEditingRoom(null);
+      onUpdateConversation?.();
+    } catch (err) {
+      console.error('Failed to save room:', err);
+    }
+  };
+
+  const handleArchiveRoom = async (room: Room) => {
+    try {
+      await api.updateRoom(conversation.id, room.id, { archived: !room.archived });
+      conversation.rooms = (conversation.rooms || []).map((r) =>
+        r.id === room.id ? { ...r, archived: !r.archived } : r
+      );
+      if (activeRoomId === room.id) {
+        const openRooms = (conversation.rooms || []).filter((r) => !r.archived);
+        if (openRooms.length > 0) setActiveRoomId(openRooms[0].id);
+      }
+      setShowRoomEditModal(false);
+      onUpdateConversation?.();
+    } catch (err) {
+      console.error('Failed to archive room:', err);
+    }
+  };
+
+  const handleDeleteRoom = async (roomId: string) => {
+    if (!window.confirm('Delete this room and its messages permanently?')) return;
+    try {
+      await api.deleteRoom(conversation.id, roomId);
+      conversation.rooms = (conversation.rooms || []).filter((r) => r.id !== roomId);
+      if (activeRoomId === roomId) {
+        const fallback = conversation.rooms[0]?.id;
+        setActiveRoomId(fallback);
+      }
+      setShowRoomEditModal(false);
+      setShowRoomsModal(false);
+      onUpdateConversation?.();
+    } catch (err) {
+      console.error('Failed to delete room:', err);
+    }
+  };
+
+  const handleMoveRoom = (roomId: string, dir: 'up' | 'down') => {
+    if (!conversation.rooms) return;
+    const idx = conversation.rooms.findIndex((r) => r.id === roomId);
+    if (idx < 0) return;
+    const targetIdx = dir === 'up' ? idx - 1 : idx + 1;
+    if (targetIdx < 0 || targetIdx >= conversation.rooms.length) return;
+    const next = [...conversation.rooms];
+    const temp = next[idx];
+    next[idx] = next[targetIdx];
+    next[targetIdx] = temp;
+    conversation.rooms = next;
+    onUpdateConversation?.();
+  };
+
+  const handleSaveGroupTitle = async () => {
+    if (!groupTitleEdit.trim() || groupTitleEdit === conversation.title) return;
+    try {
+      await api.updateGroup(conversation.id, { title: groupTitleEdit.trim() });
+      conversation.title = groupTitleEdit.trim();
+      onUpdateConversation?.();
+    } catch (err) {
+      console.error('Failed to rename group:', err);
+    }
+  };
+
+  const handleTogglePerm = async (key: 'info' | 'send' | 'add') => {
+    if (!isAdmin) return;
+    const nextPerms = { ...groupPerms, [key]: !groupPerms[key] };
+    setGroupPerms(nextPerms);
+    try {
+      await api.updateGroupPermissions(conversation.id, nextPerms);
+      conversation.permissions = nextPerms;
+      onUpdateConversation?.();
+    } catch (err) {
+      console.error('Failed to update group permissions:', err);
+    }
+  };
+
+  const handlePromoteDemote = async (targetUserId: string, currentRole: string) => {
+    const newRole = currentRole === 'admin' ? 'member' : 'admin';
+    try {
+      await api.updateMemberRole(conversation.id, targetUserId, newRole);
+      if (conversation.members) {
+        conversation.members = conversation.members.map((m) =>
+          m.userId === targetUserId ? { ...m, role: newRole as any } : m
+        );
+      }
+      onUpdateConversation?.();
+    } catch (err) {
+      console.error('Failed to change member role:', err);
+    }
+  };
+
+  const handleRemoveMember = async (targetUserId: string, name: string) => {
+    if (!window.confirm(`Remove ${name}? They will no longer see new messages in this group.`)) return;
+    try {
+      await api.removeMember(conversation.id, targetUserId);
+      if (conversation.members) {
+        conversation.members = conversation.members.filter((m) => m.userId !== targetUserId);
+      }
+      onUpdateConversation?.();
+    } catch (err) {
+      console.error('Failed to remove member:', err);
+    }
+  };
+
+  const openAddMembersModal = async () => {
+    try {
+      const res = await api.searchUsers('');
+      const existingMemberIds = new Set(conversation.members?.map((m) => m.userId) || []);
+      const candidates = res.users.filter((u) => !existingMemberIds.has(u.id));
+      setAvailableContacts(candidates);
+      setSelectedAddMemberIds(new Set());
+      setShowAddMemberModal(true);
+    } catch (err) {
+      console.error('Failed to load contacts to add:', err);
+    }
+  };
+
+  const handleAddSelectedMembers = async () => {
+    if (selectedAddMemberIds.size === 0) return;
+    try {
+      for (const uid of Array.from(selectedAddMemberIds)) {
+        await api.addMember(conversation.id, uid, 'member');
+      }
+      setShowAddMemberModal(false);
+      onUpdateConversation?.();
+    } catch (err) {
+      console.error('Failed to add members:', err);
+    }
+  };
+
+  const handleSaveExpiry = async () => {
+    let endsAt: string | null = null;
+    const now = Date.now();
+    if (expiryOption === '1h') endsAt = new Date(now + 3600000).toISOString();
+    else if (expiryOption === '24h') endsAt = new Date(now + 24 * 3600000).toISOString();
+    else if (expiryOption === '7d') endsAt = new Date(now + 7 * 24 * 3600000).toISOString();
+    else if (expiryOption === '30d') endsAt = new Date(now + 30 * 24 * 3600000).toISOString();
+    else if (expiryOption === 'custom' && expiryCustomDate) endsAt = new Date(expiryCustomDate).toISOString();
+
+    try {
+      await api.updateExpiration(conversation.id, endsAt);
+      conversation.endsAt = endsAt || undefined;
+      conversation.archivedAt = undefined;
+      conversation.isArchived = false;
+      setShowExpiryModal(false);
+      onUpdateConversation?.();
+    } catch (err) {
+      console.error('Failed to update expiration:', err);
+    }
+  };
+
+  const handleArchiveGroupNow = async () => {
+    try {
+      await api.archiveConversation(conversation.id);
+      conversation.archivedAt = new Date().toISOString();
+      conversation.isArchived = true;
+      setShowExpiryModal(false);
+      onUpdateConversation?.();
+    } catch (err) {
+      console.error('Failed to archive group:', err);
+    }
+  };
+
+  const handleUpdateLook = async (partial: Partial<typeof customLook>) => {
+    const nextLook = { ...customLook, ...partial };
+    setCustomLook(nextLook);
+    try {
+      await api.updateChatTheme(conversation.id, {
+        customTheme: nextLook,
+        isShared: nextLook.isShared,
+      });
+      conversation.customTheme = nextLook;
+    } catch (err) {
+      console.error('Failed to update theme:', err);
+    }
+  };
+
   const otherUser = (conversation as any).otherUser;
 
   // Aired status calculation
@@ -774,7 +1123,14 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
             online={conversation.type === 'direct' && isOnline(otherUser?.id || otherUser?.userId)}
           />
 
-          <div>
+          <div
+            onClick={() => {
+              if (conversation.type === 'group') setShowGroupModal(true);
+            }}
+            style={{
+              cursor: conversation.type === 'group' ? 'pointer' : 'default',
+            }}
+          >
             <div style={{ fontWeight: 600, fontSize: 14.5, color: 'var(--ink)' }}>
               {conversation.title || 'Conversation'}
             </div>
@@ -785,7 +1141,7 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
                 </span>
               ) : conversation.type === 'group' ? (
                 <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>
-                  {conversation.members?.length || 0} members
+                  {conversation.members?.length || 0} members · tap for info
                 </span>
               ) : otherUser?.downFor ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
@@ -803,8 +1159,17 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
           </div>
         </div>
 
-        {/* Action icons: In-Chat Search, Vanish Mode, Calls, Games, More */}
+        {/* Action icons: In-Chat Search, Vanish Mode, Calls, Games, Customize, More */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          {/* Palette button for Customize Chat Look */}
+          <button
+            onClick={() => setShowCustSheet(true)}
+            style={{ width: 34, height: 34, borderRadius: '50%', display: 'grid', placeItems: 'center', color: 'var(--muted)', background: 'none', border: 'none', cursor: 'pointer' }}
+            title="Customize chat appearance"
+          >
+            <Palette size={18} />
+          </button>
+
           {/* In-chat search trigger */}
           <button
             onClick={() => {
@@ -911,6 +1276,51 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
                 }}
               >
                 <button
+                  onClick={() => {
+                    setShowHMore(false);
+                    setShowCustSheet(true);
+                  }}
+                  style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 8, fontSize: 13, color: 'var(--ink)', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left' }}
+                >
+                  <Palette size={15} color="var(--accent)" />
+                  <span>Customize chat</span>
+                </button>
+                {conversation.type === 'group' && (
+                  <>
+                    <button
+                      onClick={() => {
+                        setShowHMore(false);
+                        setShowGroupModal(true);
+                      }}
+                      style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 8, fontSize: 13, color: 'var(--ink)', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left' }}
+                    >
+                      <Users size={15} color="var(--accent)" />
+                      <span>Group settings & members</span>
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowHMore(false);
+                        setShowRoomsModal(true);
+                      }}
+                      style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 8, fontSize: 13, color: 'var(--ink)', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left' }}
+                    >
+                      <Sliders size={15} color="var(--accent)" />
+                      <span>Manage rooms</span>
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowHMore(false);
+                        setShowExpiryModal(true);
+                      }}
+                      style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 8, fontSize: 13, color: 'var(--ink)', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left' }}
+                    >
+                      <Clock size={15} color="var(--muted)" />
+                      <span>Group expiration</span>
+                    </button>
+                  </>
+                )}
+                <div style={{ height: 1, backgroundColor: 'var(--line)', margin: '4px 0' }} />
+                <button
                   onClick={openMediaGallery}
                   style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 8, fontSize: 13, color: 'var(--ink)', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left' }}
                 >
@@ -967,6 +1377,84 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
             <path d="M12 3a7 7 0 0 0-7 7v11l2.5-2 2.25 2L12 19l2.25 2 2.25-2 2.5 2V10a7 7 0 0 0-7-7z" />
           </svg>
           <span>Vanish mode is on. New messages disappear 10 seconds after they are sent.</span>
+        </div>
+      )}
+
+      {/* Temporary Group Header Banner (#tmpbar) */}
+      {conversation.type === 'group' && (conversation.endsAt || conversation.archivedAt) && (
+        <div
+          className={`tmpbar${conversation.archivedAt ? ' ar' : conversation.endsAt && new Date(conversation.endsAt).getTime() - nowTime < 86400000 ? ' warn' : ''}`}
+        >
+          <Clock size={15} />
+          <span>
+            {conversation.archivedAt
+              ? `Archived · ended ${new Date(conversation.archivedAt).toLocaleDateString()}. Messages are kept.`
+              : `Temporary group · ends in ${untilLong(new Date(conversation.endsAt!).getTime())}`}
+          </span>
+          {isAdmin && (
+            <button
+              type="button"
+              className="plink"
+              onClick={() => setShowExpiryModal(true)}
+            >
+              {conversation.archivedAt ? 'Reopen' : 'Change'}
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Sub-Rooms Horizontal Pill Bar (#roomsbar) */}
+      {conversation.type === 'group' && conversation.rooms && conversation.rooms.length > 0 && (
+        <div className="rooms" id="roomsbar">
+          <div className="rmrow" role="tablist">
+            {conversation.rooms
+              .filter((r) => !r.archived || r.id === activeRoomId)
+              .map((r) => {
+                const isSelected = r.id === (activeRoomId || 'general');
+                const unreadCount = roomUnreads[r.id] || 0;
+                return (
+                  <button
+                    key={r.id}
+                    type="button"
+                    className="rmc"
+                    role="tab"
+                    aria-selected={isSelected}
+                    onClick={() => handleSwitchRoom(r.id)}
+                  >
+                    <span>{r.archived ? '🗄️' : r.emoji || '💬'}</span>
+                    <span>#{r.name}</span>
+                    {r.adminOnly && <Lock size={11} />}
+                    {unreadCount > 0 && !isSelected && (
+                      <i className="rb">{unreadCount}</i>
+                    )}
+                  </button>
+                );
+              })}
+            {isAdmin && conversation.rooms.length < 12 && (
+              <button
+                type="button"
+                className="rmc add"
+                onClick={() => {
+                  setEditingRoom(null);
+                  setEditRoomName('');
+                  setEditRoomEmoji('💬');
+                  setEditRoomAdminOnly(false);
+                  setShowRoomEditModal(true);
+                }}
+                title="Create a room"
+              >
+                <Plus size={14} />
+              </button>
+            )}
+          </div>
+          <button
+            type="button"
+            className="rmmg"
+            onClick={() => setShowRoomsModal(true)}
+            title={isAdmin ? 'Manage rooms' : 'All rooms'}
+          >
+            <Sliders size={18} />
+          </button>
         </div>
       )}
 
@@ -1538,102 +2026,59 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
         </div>
       )}
 
-      {/* Composer Bottom Bar */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          padding: '10px 14px',
-          borderTop: '1px solid var(--line)',
-          backgroundColor: 'var(--panel)',
-          position: 'relative',
-        }}
-      >
-        {isRecording ? (
-          /* Live Voice Recording Bar */
-          <div className="rec">
-            <button
-              onClick={cancelRecording}
-              style={{ width: 32, height: 32, borderRadius: '50%', display: 'grid', placeItems: 'center', color: 'var(--muted)', background: 'none', border: 'none', cursor: 'pointer' }}
-              title="Cancel recording"
-            >
-              <X size={18} />
-            </button>
-            <i className="rdot" />
-            <span className="rtimer">
-              {Math.floor(recordingSeconds / 60)}:{(recordingSeconds % 60).toString().padStart(2, '0')}
-            </span>
-            <div className="rwave">
-              {liveWaveform.map((h, i) => (
-                <i key={i} style={{ height: `${h}%` }} />
-              ))}
-            </div>
-            <button
-              onClick={finishRecording}
-              style={{
-                width: 36,
-                height: 36,
-                borderRadius: '50%',
-                backgroundColor: 'var(--accent)',
-                color: '#fff',
-                display: 'grid',
-                placeItems: 'center',
-                border: 'none',
-                cursor: 'pointer',
-              }}
-              title="Send voice message"
-            >
-              <Send size={16} />
-            </button>
-          </div>
-        ) : (
-          /* Normal Message Input Controls */
-          <>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                setShowAttachMenu((prev) => !prev);
-              }}
-              style={{ width: 34, height: 34, borderRadius: '50%', display: 'grid', placeItems: 'center', color: 'var(--muted)', background: 'none', border: 'none', cursor: 'pointer' }}
-              title="Attach media or files"
-            >
-              <Paperclip size={18} />
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setShowEmojiPanel((prev) => !prev)}
-              style={{ width: 34, height: 34, borderRadius: '50%', display: 'grid', placeItems: 'center', color: showEmojiPanel ? 'var(--accent)' : 'var(--muted)', background: 'none', border: 'none', cursor: 'pointer' }}
-              title="Emoji, GIFs & stickers"
-            >
-              <Smile size={18} />
-            </button>
-
-            <form onSubmit={handleSendMessage} style={{ flex: 1, display: 'flex' }}>
-              <input
-                type="text"
-                placeholder={activeRoomId ? `Message in #${conversation.rooms?.find((r) => r.id === activeRoomId)?.name || 'room'}...` : 'Message...'}
-                value={inputValue}
-                onChange={handleInputChange}
-                style={{
-                  width: '100%',
-                  padding: '9px 14px',
-                  borderRadius: 20,
-                  backgroundColor: 'var(--hover)',
-                  color: 'var(--ink)',
-                  fontSize: 14,
-                  border: 'none',
-                  outline: 'none',
-                }}
-              />
-            </form>
-
-            {inputValue.trim() ? (
+      {/* Composer Bottom Bar or Room Lock Banner */}
+      {lockMessage ? (
+        <div
+          style={{
+            padding: '14px 18px',
+            backgroundColor: 'var(--hover)',
+            borderTop: '1px solid var(--line)',
+            textAlign: 'center',
+            color: 'var(--muted)',
+            fontSize: 13,
+            fontWeight: 500,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 8,
+          }}
+        >
+          <Lock size={15} color="var(--muted)" />
+          <span>{lockMessage}</span>
+        </div>
+      ) : (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '10px 14px',
+            borderTop: '1px solid var(--line)',
+            backgroundColor: 'var(--panel)',
+            position: 'relative',
+          }}
+        >
+          {isRecording ? (
+            /* Live Voice Recording Bar */
+            <div className="rec">
               <button
-                type="button"
-                onClick={() => handleSendMessage()}
+                onClick={cancelRecording}
+                style={{ width: 32, height: 32, borderRadius: '50%', display: 'grid', placeItems: 'center', color: 'var(--muted)', background: 'none', border: 'none', cursor: 'pointer' }}
+                title="Cancel recording"
+              >
+                <X size={18} />
+              </button>
+              <i className="rdot" />
+              <span className="rtimer">
+                {Math.floor(recordingSeconds / 60)}:{(recordingSeconds % 60).toString().padStart(2, '0')}
+              </span>
+              <div className="rwave">
+                {liveWaveform.map((h, i) => (
+                  <i key={i} style={{ height: `${h}%` }} />
+                ))}
+              </div>
+              <button
+                onClick={finishRecording}
                 style={{
                   width: 36,
                   height: 36,
@@ -1644,35 +2089,99 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
                   placeItems: 'center',
                   border: 'none',
                   cursor: 'pointer',
-                  transition: 'background-color 0.15s ease',
                 }}
-                title="Send"
+                title="Send voice message"
               >
                 <Send size={16} />
               </button>
-            ) : (
+            </div>
+          ) : (
+            /* Normal Message Input Controls */
+            <>
               <button
                 type="button"
-                onClick={startRecording}
-                style={{
-                  width: 36,
-                  height: 36,
-                  borderRadius: '50%',
-                  backgroundColor: 'var(--hover)',
-                  color: 'var(--accent)',
-                  display: 'grid',
-                  placeItems: 'center',
-                  border: 'none',
-                  cursor: 'pointer',
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowAttachMenu((prev) => !prev);
                 }}
-                title="Record voice message"
+                style={{ width: 34, height: 34, borderRadius: '50%', display: 'grid', placeItems: 'center', color: 'var(--muted)', background: 'none', border: 'none', cursor: 'pointer' }}
+                title="Attach media or files"
               >
-                <Mic size={18} />
+                <Paperclip size={18} />
               </button>
-            )}
-          </>
-        )}
-      </div>
+
+              <button
+                type="button"
+                onClick={() => setShowEmojiPanel((prev) => !prev)}
+                style={{ width: 34, height: 34, borderRadius: '50%', display: 'grid', placeItems: 'center', color: showEmojiPanel ? 'var(--accent)' : 'var(--muted)', background: 'none', border: 'none', cursor: 'pointer' }}
+                title="Emoji, GIFs & stickers"
+              >
+                <Smile size={18} />
+              </button>
+
+              <form onSubmit={handleSendMessage} style={{ flex: 1, display: 'flex' }}>
+                <input
+                  type="text"
+                  placeholder={activeRoomId ? `Message in #${conversation.rooms?.find((r) => r.id === activeRoomId)?.name || 'room'}...` : 'Message...'}
+                  value={inputValue}
+                  onChange={handleInputChange}
+                  style={{
+                    width: '100%',
+                    padding: '9px 14px',
+                    borderRadius: 20,
+                    backgroundColor: 'var(--hover)',
+                    color: 'var(--ink)',
+                    fontSize: 14,
+                    border: 'none',
+                    outline: 'none',
+                  }}
+                />
+              </form>
+
+              {inputValue.trim() ? (
+                <button
+                  type="button"
+                  onClick={() => handleSendMessage()}
+                  style={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: '50%',
+                    backgroundColor: 'var(--accent)',
+                    color: '#fff',
+                    display: 'grid',
+                    placeItems: 'center',
+                    border: 'none',
+                    cursor: 'pointer',
+                    transition: 'background-color 0.15s ease',
+                  }}
+                  title="Send"
+                >
+                  <Send size={16} />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={startRecording}
+                  style={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: '50%',
+                    backgroundColor: 'var(--hover)',
+                    color: 'var(--accent)',
+                    display: 'grid',
+                    placeItems: 'center',
+                    border: 'none',
+                    cursor: 'pointer',
+                  }}
+                  title="Record voice message"
+                >
+                  <Mic size={18} />
+                </button>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       {/* Fullscreen Lightbox Modal (#lb) */}
       {lightboxUrl && (
@@ -1897,6 +2406,959 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
                     ))}
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===== BATCH 2: CHAT CUSTOMIZATION SHEET ===== */}
+      {showCustSheet && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 110,
+            backgroundColor: 'var(--panel)',
+            display: 'flex',
+            flexDirection: 'column',
+            maxWidth: 520,
+            margin: '0 auto',
+            boxShadow: 'var(--shadow)',
+          }}
+        >
+          {/* Top Bar */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderBottom: '1px solid var(--line)' }}>
+            <button
+              onClick={() => setShowCustSheet(false)}
+              style={{ width: 34, height: 34, borderRadius: '50%', display: 'grid', placeItems: 'center', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--ink)' }}
+            >
+              <ArrowLeft size={20} />
+            </button>
+            <span style={{ fontWeight: 700, fontSize: 16, color: 'var(--ink)' }}>Customize chat</span>
+          </div>
+
+          <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px' }}>
+            {/* Live Chat Bubble Preview Box (#cpv) */}
+            <div
+              className="cpv"
+              style={{
+                backgroundColor: customLook.wallpaper?.type === 'solid' ? customLook.wallpaper.value : 'var(--wall)',
+                backgroundImage: customLook.wallpaper?.type === 'grad'
+                  ? customLook.wallpaper.value
+                  : customLook.wallpaper?.type === 'pat'
+                  ? customLook.wallpaper.value
+                  : customLook.wallpaper?.type === 'img'
+                  ? `url(${customLook.wallpaper.value})`
+                  : undefined,
+                position: 'relative',
+                overflow: 'hidden',
+              }}
+            >
+              {!!customLook.dim && customLook.dim > 0 && (
+                <div style={{ position: 'absolute', inset: 0, backgroundColor: `rgba(0,0,0,${customLook.dim / 100})`, pointerEvents: 'none' }} />
+              )}
+              <div className="cb them" style={{ position: 'relative', zIndex: 2 }}>
+                <span>Are you coming tonight?</span>
+              </div>
+              <div
+                className="cb me"
+                style={{
+                  position: 'relative',
+                  zIndex: 2,
+                  backgroundColor: customLook.accent || 'var(--accent)',
+                  color: '#fff',
+                }}
+              >
+                <span>Yes, see you at 8 ✨</span>
+              </div>
+              <div className="cb them" style={{ position: 'relative', zIndex: 2 }}>
+                <span>Perfect 🙌</span>
+              </div>
+            </div>
+
+            {/* Accent Color Section */}
+            <div className="cs">
+              <h3>Accent color</h3>
+              <p className="note2">Sets the primary accent for buttons and your outgoing messages.</p>
+              <div className="swr">
+                {ACC_PRESETS.map((hex) => (
+                  <button
+                    key={hex}
+                    type="button"
+                    className="swt"
+                    aria-pressed={customLook.accent === hex}
+                    style={{ backgroundColor: hex }}
+                    onClick={() => handleUpdateLook({ accent: hex })}
+                  />
+                ))}
+                <label className="swt cust" title="Custom color">
+                  <input
+                    type="color"
+                    value={customLook.accent || '#0F6B58'}
+                    onChange={(e) => handleUpdateLook({ accent: e.target.value })}
+                  />
+                </label>
+              </div>
+            </div>
+
+            {/* Wallpaper Section */}
+            <div className="cs">
+              <h3>Wallpaper</h3>
+              <p className="note2">Choose a solid color, vibrant gradient, or subtle pattern.</p>
+              <div className="wpg">
+                <button
+                  type="button"
+                  className="wpt"
+                  aria-pressed={customLook.wallpaper?.type === 'none'}
+                  onClick={() => handleUpdateLook({ wallpaper: { type: 'none', value: '' } })}
+                >
+                  <span>Default</span>
+                </button>
+                {WP_SOLIDS.map((solid) => (
+                  <button
+                    key={solid}
+                    type="button"
+                    className="wpt"
+                    aria-pressed={customLook.wallpaper?.type === 'solid' && customLook.wallpaper.value === solid}
+                    style={{ backgroundColor: solid }}
+                    onClick={() => handleUpdateLook({ wallpaper: { type: 'solid', value: solid } })}
+                  />
+                ))}
+                {WP_GRADS.map((grad, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    className="wpt"
+                    aria-pressed={customLook.wallpaper?.type === 'grad' && customLook.wallpaper.value === grad}
+                    style={{ background: grad }}
+                    onClick={() => handleUpdateLook({ wallpaper: { type: 'grad', value: grad } })}
+                  />
+                ))}
+                {WP_PATS.map((pat) => (
+                  <button
+                    key={pat.id}
+                    type="button"
+                    className="wpt"
+                    aria-pressed={customLook.wallpaper?.type === 'pat' && customLook.wallpaper.value === pat.css}
+                    style={{ background: pat.css }}
+                    onClick={() => handleUpdateLook({ wallpaper: { type: 'pat', value: pat.css } })}
+                  >
+                    <span>{pat.name}</span>
+                  </button>
+                ))}
+              </div>
+
+              {/* Dim Slider */}
+              <label className="slr">
+                <span>Dim wallpaper: <b>{customLook.dim || 0}%</b></span>
+                <input
+                  type="range"
+                  min="0"
+                  max="60"
+                  step="5"
+                  value={customLook.dim || 0}
+                  onChange={(e) => handleUpdateLook({ dim: parseInt(e.target.value, 10) })}
+                />
+              </label>
+            </div>
+
+            {/* Notification Sounds Section */}
+            <div className="cs">
+              <h3>Notification Sound</h3>
+              <p className="note2">Native WebAudio tone synthesizers. Tap to test tone.</p>
+              <div className="optr">
+                {SOUND_PRESETS.map((snd) => (
+                  <button
+                    key={snd}
+                    type="button"
+                    aria-pressed={customLook.tone === snd}
+                    onClick={() => {
+                      playTone(snd);
+                      handleUpdateLook({ tone: snd });
+                    }}
+                  >
+                    <Volume2 size={13} />
+                    <span>{snd.charAt(0).toUpperCase() + snd.slice(1)}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Group Theme Sharing */}
+            {conversation.type === 'group' && (
+              <div className="cs">
+                <h3>Group theme {isAdmin && <span className="admb">Admin</span>}</h3>
+                {isAdmin ? (
+                  <>
+                    <p className="note2">As an admin you can share your current look with everyone in this group.</p>
+                    <div className="optr">
+                      <button
+                        type="button"
+                        onClick={() => handleUpdateLook({ isShared: !customLook.isShared })}
+                        style={{ backgroundColor: customLook.isShared ? 'var(--accent)' : 'var(--panel)', color: customLook.isShared ? '#fff' : 'var(--ink)' }}
+                      >
+                        {customLook.isShared ? 'Group theme is active (tap to turn off)' : 'Use my look for the group'}
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <p className="note2">Only group admins can set a shared group theme.</p>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ===== BATCH 2: GROUP ADMINISTRATION MODAL ===== */}
+      {showGroupModal && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 110,
+            backgroundColor: 'rgba(0,0,0,0.65)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 16,
+          }}
+        >
+          <div
+            style={{
+              width: '100%',
+              maxWidth: 460,
+              backgroundColor: 'var(--panel)',
+              borderRadius: 16,
+              border: '1px solid var(--line)',
+              boxShadow: 'var(--shadow)',
+              padding: '18px 20px',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <h2 style={{ fontSize: 18, fontWeight: 700, color: 'var(--ink)' }}>Group Settings</h2>
+              <button
+                onClick={() => setShowGroupModal(false)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Group Name Field */}
+            {canEditInfo ? (
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--muted)', marginBottom: 4 }}>
+                  Group name
+                </label>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <input
+                    type="text"
+                    value={groupTitleEdit}
+                    onChange={(e) => setGroupTitleEdit(e.target.value)}
+                    onBlur={handleSaveGroupTitle}
+                    style={{
+                      flex: 1,
+                      padding: '8px 12px',
+                      borderRadius: 10,
+                      backgroundColor: 'var(--hover)',
+                      border: '1px solid var(--line)',
+                      color: 'var(--ink)',
+                      fontSize: 14,
+                      outline: 'none',
+                    }}
+                  />
+                  <button
+                    onClick={handleSaveGroupTitle}
+                    style={{ padding: '0 12px', borderRadius: 10, backgroundColor: 'var(--accent)', color: '#fff', border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}
+                  >
+                    Save
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div style={{ marginBottom: 14 }}>
+                <b style={{ fontSize: 16, color: 'var(--ink)' }}>{conversation.title}</b>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '14px 0 8px' }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--muted)' }}>
+                {conversation.members?.length || 0} members {isAdmin ? '' : '· Only admins manage members'}
+              </span>
+              {canAdd && (
+                <button
+                  type="button"
+                  onClick={openAddMembersModal}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 5,
+                    padding: '5px 10px',
+                    borderRadius: 8,
+                    backgroundColor: 'var(--hover)',
+                    border: '1px solid var(--line)',
+                    color: 'var(--accent)',
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  <UserPlus size={13} />
+                  <span>Add members</span>
+                </button>
+              )}
+            </div>
+
+            {/* Member List */}
+            <div className="gml">
+              {conversation.members?.map((m) => {
+                const isTargetAdmin = m.role === 'admin' || m.role === 'owner';
+                const isMe = m.userId === user?.id;
+                const displayName = (m as any).displayName || (m as any).user?.displayName || (m as any).username || 'Member';
+                return (
+                  <div key={m.userId} className="gmr">
+                    <Avatar name={displayName} url={(m as any).avatarUrl} size={32} />
+                    <div className="gmn">
+                      <b>{displayName} {isMe ? '(You)' : ''}</b>
+                      {isTargetAdmin && <small>Admin</small>}
+                    </div>
+                    {isAdmin && !isMe && (
+                      <div className="gma">
+                        <button
+                          type="button"
+                          className="gms"
+                          onClick={() => handlePromoteDemote(m.userId, m.role)}
+                        >
+                          {isTargetAdmin ? 'Remove admin' : 'Make admin'}
+                        </button>
+                        <button
+                          type="button"
+                          className="gms dng2"
+                          onClick={() => handleRemoveMember(m.userId, displayName)}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Permissions Section (3 Toggles) */}
+            <h3 className="gh3">Group Permissions</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 14 }}>
+              <label className="strw">
+                <span className="stx">
+                  <b>Only admins edit group info</b>
+                  <small>Group name, avatar and shared look</small>
+                </span>
+                <input
+                  type="checkbox"
+                  className="stsw"
+                  checked={Boolean(groupPerms.info)}
+                  disabled={!isAdmin}
+                  onChange={() => handleTogglePerm('info')}
+                />
+              </label>
+
+              <label className="strw">
+                <span className="stx">
+                  <b>Only admins can send messages</b>
+                  <small>All other members can read only</small>
+                </span>
+                <input
+                  type="checkbox"
+                  className="stsw"
+                  checked={Boolean(groupPerms.send)}
+                  disabled={!isAdmin}
+                  onChange={() => handleTogglePerm('send')}
+                />
+              </label>
+
+              <label className="strw">
+                <span className="stx">
+                  <b>Only admins can add members</b>
+                  <small>Members cannot invite friends</small>
+                </span>
+                <input
+                  type="checkbox"
+                  className="stsw"
+                  checked={Boolean(groupPerms.add)}
+                  disabled={!isAdmin}
+                  onChange={() => handleTogglePerm('add')}
+                />
+              </label>
+            </div>
+            {!isAdmin && (
+              <p className="note2">You are not an admin, so permissions are read-only.</p>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+              <button
+                type="button"
+                onClick={() => setShowGroupModal(false)}
+                style={{ padding: '8px 18px', borderRadius: 10, backgroundColor: 'var(--accent)', color: '#fff', border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===== BATCH 2: ADD MEMBER MODAL ===== */}
+      {showAddMemberModal && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 120,
+            backgroundColor: 'rgba(0,0,0,0.7)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 16,
+          }}
+        >
+          <div
+            style={{
+              width: '100%',
+              maxWidth: 420,
+              backgroundColor: 'var(--panel)',
+              borderRadius: 16,
+              border: '1px solid var(--line)',
+              boxShadow: 'var(--shadow)',
+              padding: '18px 20px',
+              maxHeight: '85vh',
+              overflowY: 'auto',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <h3 style={{ fontSize: 17, fontWeight: 700, color: 'var(--ink)' }}>Add Members</h3>
+              <button
+                onClick={() => setShowAddMemberModal(false)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {availableContacts.length === 0 ? (
+              <div style={{ padding: 24, textAlign: 'center', color: 'var(--muted)', fontSize: 13 }}>
+                All your contacts are already in this group.
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 300, overflowY: 'auto', margin: '10px 0 16px' }}>
+                {availableContacts.map((c) => {
+                  const isSelected = selectedAddMemberIds.has(c.id);
+                  return (
+                    <div
+                      key={c.id}
+                      onClick={() => {
+                        setSelectedAddMemberIds((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(c.id)) next.delete(c.id);
+                          else next.add(c.id);
+                          return next;
+                        });
+                      }}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '8px 10px',
+                        borderRadius: 10,
+                        backgroundColor: isSelected ? 'var(--hover)' : 'var(--side)',
+                        border: '1px solid var(--line)',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <Avatar name={c.displayName || c.username} url={c.avatarUrl} size={34} />
+                        <div>
+                          <b style={{ display: 'block', fontSize: 13, color: 'var(--ink)' }}>{c.displayName}</b>
+                          <span style={{ fontSize: 11, color: 'var(--muted)' }}>@{c.username}</span>
+                        </div>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => {}}
+                        style={{ width: 18, height: 18, cursor: 'pointer' }}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button
+                type="button"
+                onClick={() => setShowAddMemberModal(false)}
+                style={{ padding: '7px 14px', borderRadius: 8, background: 'none', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontSize: 13 }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleAddSelectedMembers}
+                disabled={selectedAddMemberIds.size === 0}
+                style={{
+                  padding: '7px 16px',
+                  borderRadius: 8,
+                  backgroundColor: 'var(--accent)',
+                  color: '#fff',
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontSize: 13,
+                  fontWeight: 600,
+                  opacity: selectedAddMemberIds.size === 0 ? 0.45 : 1,
+                }}
+              >
+                Add {selectedAddMemberIds.size > 0 ? `(${selectedAddMemberIds.size})` : ''}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===== BATCH 2: ROOMS MANAGEMENT MODAL ===== */}
+      {showRoomsModal && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 110,
+            backgroundColor: 'rgba(0,0,0,0.65)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 16,
+          }}
+        >
+          <div
+            style={{
+              width: '100%',
+              maxWidth: 480,
+              backgroundColor: 'var(--panel)',
+              borderRadius: 16,
+              border: '1px solid var(--line)',
+              boxShadow: 'var(--shadow)',
+              padding: '18px 20px',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <h2 style={{ fontSize: 18, fontWeight: 700, color: 'var(--ink)' }}>Rooms in {conversation.title}</h2>
+              <button
+                onClick={() => setShowRoomsModal(false)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <p className="note2">
+              Rooms keep topics apart inside one group. Everyone stays in the same group.
+              {isAdmin ? '' : ' Only admins can create or edit rooms.'}
+            </p>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, margin: '12px 0 16px', maxHeight: '50vh', overflowY: 'auto' }}>
+              {(conversation.rooms || []).map((r, i) => {
+                const unread = roomUnreads[r.id] || 0;
+                return (
+                  <div key={r.id} className="rmr">
+                    <span className="rme2">{r.archived ? '🗄️' : r.emoji || '💬'}</span>
+                    <span className="rmn">
+                      <b>#{r.name}</b>
+                      <small>
+                        {r.id === 'general' ? 'Pinned · ' : ''}
+                        {r.adminOnly ? 'Only admins can post' : 'Everyone can post'}
+                        {unread > 0 ? ` · ${unread} unread` : ''}
+                      </small>
+                    </span>
+                    {isAdmin && !r.archived && r.id !== 'general' && (
+                      <>
+                        <button
+                          type="button"
+                          className="icon"
+                          disabled={i <= 1}
+                          onClick={() => handleMoveRoom(r.id, 'up')}
+                          style={{ width: 28, height: 28, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', opacity: i <= 1 ? 0.3 : 1 }}
+                        >
+                          <ChevronUp size={16} />
+                        </button>
+                        <button
+                          type="button"
+                          className="icon"
+                          disabled={i >= (conversation.rooms?.length || 1) - 1}
+                          onClick={() => handleMoveRoom(r.id, 'down')}
+                          style={{ width: 28, height: 28, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', opacity: i >= (conversation.rooms?.length || 1) - 1 ? 0.3 : 1 }}
+                        >
+                          <ChevronDown size={16} />
+                        </button>
+                        <button
+                          type="button"
+                          className="outb"
+                          onClick={() => {
+                            setEditingRoom(r);
+                            setEditRoomName(r.name);
+                            setEditRoomEmoji(r.emoji || '💬');
+                            setEditRoomAdminOnly(Boolean(r.adminOnly));
+                            setShowRoomEditModal(true);
+                          }}
+                          style={{ padding: '4px 10px', fontSize: 12, borderRadius: 6, border: '1px solid var(--line)', background: 'var(--hover)', color: 'var(--ink)', cursor: 'pointer' }}
+                        >
+                          Edit
+                        </button>
+                      </>
+                    )}
+                    {r.archived ? (
+                      <>
+                        {isAdmin && (
+                          <button
+                            type="button"
+                            onClick={() => handleArchiveRoom(r)}
+                            style={{ padding: '4px 10px', fontSize: 12, borderRadius: 6, border: '1px solid var(--line)', background: 'var(--hover)', color: 'var(--accent)', cursor: 'pointer' }}
+                          >
+                            Restore
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowRoomsModal(false);
+                            handleSwitchRoom(r.id);
+                          }}
+                          style={{ padding: '4px 10px', fontSize: 12, borderRadius: 6, border: '1px solid var(--line)', background: 'var(--panel)', color: 'var(--ink)', cursor: 'pointer' }}
+                        >
+                          View
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowRoomsModal(false);
+                          handleSwitchRoom(r.id);
+                        }}
+                        style={{ padding: '4px 10px', fontSize: 12, borderRadius: 6, border: '1px solid var(--line)', background: 'var(--panel)', color: 'var(--ink)', cursor: 'pointer' }}
+                      >
+                        Open
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 14 }}>
+              <button
+                type="button"
+                onClick={() => setShowRoomsModal(false)}
+                style={{ padding: '7px 16px', borderRadius: 8, border: '1px solid var(--line)', background: 'none', color: 'var(--ink)', cursor: 'pointer', fontSize: 13 }}
+              >
+                Close
+              </button>
+              {isAdmin && (conversation.rooms?.length || 0) < 12 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingRoom(null);
+                    setEditRoomName('');
+                    setEditRoomEmoji('💬');
+                    setEditRoomAdminOnly(false);
+                    setShowRoomEditModal(true);
+                  }}
+                  style={{ padding: '7px 16px', borderRadius: 8, backgroundColor: 'var(--accent)', color: '#fff', border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}
+                >
+                  New room
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===== BATCH 2: ROOM EDIT MODAL ===== */}
+      {showRoomEditModal && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 125,
+            backgroundColor: 'rgba(0,0,0,0.7)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 16,
+          }}
+        >
+          <div
+            style={{
+              width: '100%',
+              maxWidth: 420,
+              backgroundColor: 'var(--panel)',
+              borderRadius: 16,
+              border: '1px solid var(--line)',
+              boxShadow: 'var(--shadow)',
+              padding: '18px 20px',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <h3 style={{ fontSize: 17, fontWeight: 700, color: 'var(--ink)' }}>
+                {editingRoom ? 'Edit room' : 'New room'}
+              </h3>
+              <button
+                onClick={() => setShowRoomEditModal(false)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--muted)', marginBottom: 4 }}>
+                Name
+              </label>
+              <input
+                type="text"
+                maxLength={24}
+                value={editRoomName}
+                onChange={(e) => setEditRoomName(e.target.value)}
+                placeholder="e.g. Study group, Beach plans"
+                style={{
+                  width: '100%',
+                  padding: '8px 12px',
+                  borderRadius: 10,
+                  backgroundColor: 'var(--hover)',
+                  border: '1px solid var(--line)',
+                  color: 'var(--ink)',
+                  fontSize: 14,
+                  outline: 'none',
+                }}
+                autoFocus
+              />
+            </div>
+
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--muted)', marginBottom: 6 }}>
+                Icon
+              </label>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {REMO.map((emoji) => (
+                  <button
+                    key={emoji}
+                    type="button"
+                    onClick={() => setEditRoomEmoji(emoji)}
+                    style={{
+                      width: 38,
+                      height: 38,
+                      borderRadius: 10,
+                      fontSize: 18,
+                      display: 'grid',
+                      placeItems: 'center',
+                      backgroundColor: editRoomEmoji === emoji ? 'var(--hover)' : 'var(--side)',
+                      border: editRoomEmoji === emoji ? '2px solid var(--accent)' : '1px solid var(--line)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {emoji}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <label className="strw" style={{ marginTop: 12 }}>
+              <span className="stx">
+                <b>Only admins can post</b>
+                <small>Members can read messages</small>
+              </span>
+              <input
+                type="checkbox"
+                className="stsw"
+                checked={editRoomAdminOnly}
+                onChange={(e) => setEditRoomAdminOnly(e.target.checked)}
+              />
+            </label>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 18 }}>
+              {editingRoom && editingRoom.id !== 'general' ? (
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button
+                    type="button"
+                    onClick={() => handleArchiveRoom(editingRoom)}
+                    style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid var(--line)', background: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 12 }}
+                  >
+                    {editingRoom.archived ? 'Restore' : 'Archive'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteRoom(editingRoom.id)}
+                    style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid rgba(239,68,68,0.3)', background: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 12 }}
+                  >
+                    Delete
+                  </button>
+                </div>
+              ) : <div />}
+
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button
+                  type="button"
+                  onClick={() => setShowRoomEditModal(false)}
+                  style={{ padding: '7px 14px', borderRadius: 8, border: '1px solid var(--line)', background: 'none', color: 'var(--ink)', cursor: 'pointer', fontSize: 13 }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveRoom}
+                  disabled={!editRoomName.trim()}
+                  style={{
+                    padding: '7px 16px',
+                    borderRadius: 8,
+                    backgroundColor: 'var(--accent)',
+                    color: '#fff',
+                    border: 'none',
+                    cursor: 'pointer',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    opacity: !editRoomName.trim() ? 0.45 : 1,
+                  }}
+                >
+                  {editingRoom ? 'Save' : 'Create'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===== BATCH 2: GROUP EXPIRATION MODAL ===== */}
+      {showExpiryModal && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 110,
+            backgroundColor: 'rgba(0,0,0,0.65)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 16,
+          }}
+        >
+          <div
+            style={{
+              width: '100%',
+              maxWidth: 420,
+              backgroundColor: 'var(--panel)',
+              borderRadius: 16,
+              border: '1px solid var(--line)',
+              boxShadow: 'var(--shadow)',
+              padding: '18px 20px',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <h3 style={{ fontSize: 17, fontWeight: 700, color: 'var(--ink)' }}>
+                {conversation.archivedAt ? 'Reopen group' : 'Group expiration'}
+              </h3>
+              <button
+                onClick={() => setShowExpiryModal(false)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <p className="note2">
+              {conversation.archivedAt
+                ? `This group ended ${new Date(conversation.archivedAt).toLocaleDateString()}. Choose how long it stays open.`
+                : conversation.endsAt
+                ? `Ends ${new Date(conversation.endsAt).toLocaleDateString()} (${untilLong(new Date(conversation.endsAt).getTime())} left).`
+                : 'This group never expires.'}
+            </p>
+
+            <div className="clab">Expires in</div>
+            <div className="optr" style={{ marginBottom: 12 }}>
+              {[
+                { k: 'none', l: 'No expiration' },
+                { k: '1h', l: '1 hour' },
+                { k: '24h', l: '24 hours' },
+                { k: '7d', l: '7 days' },
+                { k: '30d', l: '30 days' },
+                { k: 'custom', l: 'Custom date' },
+              ].map((opt) => (
+                <button
+                  key={opt.k}
+                  type="button"
+                  aria-pressed={expiryOption === opt.k}
+                  onClick={() => setExpiryOption(opt.k as any)}
+                >
+                  {opt.l}
+                </button>
+              ))}
+            </div>
+
+            {expiryOption === 'custom' && (
+              <input
+                type="date"
+                className="din"
+                value={expiryCustomDate}
+                onChange={(e) => setExpiryCustomDate(e.target.value)}
+                min={new Date(Date.now() + 86400000).toISOString().slice(0, 10)}
+              />
+            )}
+            <p className="note2" style={{ marginTop: 8 }}>
+              When it ends the group is archived, not deleted. Messages and media stay readable.
+            </p>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 18 }}>
+              {!conversation.archivedAt ? (
+                <button
+                  type="button"
+                  onClick={handleArchiveGroupNow}
+                  style={{ padding: '7px 12px', borderRadius: 8, border: '1px solid rgba(239,68,68,0.3)', background: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 13 }}
+                >
+                  Archive now
+                </button>
+              ) : <div />}
+
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button
+                  type="button"
+                  onClick={() => setShowExpiryModal(false)}
+                  style={{ padding: '7px 14px', borderRadius: 8, border: '1px solid var(--line)', background: 'none', color: 'var(--ink)', cursor: 'pointer', fontSize: 13 }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveExpiry}
+                  style={{
+                    padding: '7px 16px',
+                    borderRadius: 8,
+                    backgroundColor: 'var(--accent)',
+                    color: '#fff',
+                    border: 'none',
+                    cursor: 'pointer',
+                    fontSize: 13,
+                    fontWeight: 600,
+                  }}
+                >
+                  {conversation.archivedAt ? 'Reopen' : 'Save'}
+                </button>
+              </div>
             </div>
           </div>
         </div>

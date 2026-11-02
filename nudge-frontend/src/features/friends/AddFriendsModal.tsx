@@ -33,7 +33,7 @@ export const AddFriendsModal: React.FC<AddFriendsModalProps> = ({
   // Group creation state
   const [groupTitle, setGroupTitle] = useState('');
   const [selectedMemberIds, setSelectedMemberIds] = useState<Set<string>>(new Set());
-  const [expirationKey, setExpirationKey] = useState<'none' | '24h' | '7d' | '30d' | 'custom'>('none');
+  const [expirationKey, setExpirationKey] = useState<'none' | '1h' | '24h' | '7d' | '30d' | 'custom'>('none');
   const [customDate, setCustomDate] = useState('');
   const [roomsList, setRoomsList] = useState(DEFAULT_ROOM_OPTIONS);
   const [creatingGroup, setCreatingGroup] = useState(false);
@@ -98,7 +98,8 @@ export const AddFriendsModal: React.FC<AddFriendsModalProps> = ({
 
     let endsAt: string | null = null;
     const now = Date.now();
-    if (expirationKey === '24h') endsAt = new Date(now + 24 * 3600000).toISOString();
+    if (expirationKey === '1h') endsAt = new Date(now + 3600000).toISOString();
+    else if (expirationKey === '24h') endsAt = new Date(now + 24 * 3600000).toISOString();
     else if (expirationKey === '7d') endsAt = new Date(now + 7 * 24 * 3600000).toISOString();
     else if (expirationKey === '30d') endsAt = new Date(now + 30 * 24 * 3600000).toISOString();
     else if (expirationKey === 'custom' && customDate) endsAt = new Date(customDate).toISOString();
@@ -362,6 +363,7 @@ export const AddFriendsModal: React.FC<AddFriendsModalProps> = ({
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
                 {[
                   { key: 'none', label: 'Permanent' },
+                  { key: '1h', label: '1 Hour' },
                   { key: '24h', label: '24 Hours' },
                   { key: '7d', label: '7 Days' },
                   { key: '30d', label: '30 Days' },
