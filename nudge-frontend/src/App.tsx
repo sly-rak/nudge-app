@@ -338,7 +338,7 @@ export const App: React.FC = () => {
 
           {/* TAB 2: STORIES / SOCIAL FEED */}
           {activeTab === 'stories' && (
-            <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', backgroundColor: 'var(--wall)', overflowY: 'auto' }}>
+            <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', backgroundColor: 'var(--panel)', overflow: 'hidden' }}>
               <StoryFeedView
                 onOpenStoryViewer={(idx, feeds) => handleOpenStoryViewerWithFeeds(idx, feeds || allStoryFeeds)}
                 onOpenCreateStory={() => setShowCreateStory(true)}

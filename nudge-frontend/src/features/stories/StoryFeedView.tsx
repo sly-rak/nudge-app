@@ -274,9 +274,41 @@ export const StoryFeedView: React.FC<StoryFeedViewProps> = ({
         flexDirection: 'column',
         height: '100%',
         backgroundColor: 'var(--panel)',
-        overflowY: 'auto',
+        overflow: 'hidden',
       }}
     >
+      {/* Top Header */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '12px 20px',
+          borderBottom: '1px solid var(--line)',
+          backgroundColor: 'var(--panel)',
+          flexShrink: 0,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div
+            style={{
+              width: 32,
+              height: 32,
+              borderRadius: 10,
+              backgroundColor: 'var(--accent)',
+              display: 'grid',
+              placeItems: 'center',
+            }}
+          >
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="white">
+              <path d="M6.5 5h8A3.5 3.5 0 0 1 18 8.5v4a3.5 3.5 0 0 1-3.5 3.5H11l-3.6 3v-3h-.9A3.5 3.5 0 0 1 3 12.5v-4A3.5 3.5 0 0 1 6.5 5z" />
+              <circle cx="19" cy="5" r="2.6" fill="var(--gold-hi)" />
+            </svg>
+          </div>
+          <h2 style={{ fontSize: 18, fontWeight: 700, color: 'var(--ink)', margin: 0 }}>Story & Feed</h2>
+        </div>
+      </div>
+
       {/* 24h Story Bar at Top */}
       <StoriesTray
         onOpenStoryViewer={(idx, feeds) => onOpenStoryViewer(idx, feeds)}
@@ -285,8 +317,16 @@ export const StoryFeedView: React.FC<StoryFeedViewProps> = ({
         onOpenWatchDemo={onOpenWatchDemo}
       />
 
-      {/* Main Feed Container */}
-      <div style={{ maxWidth: 580, width: '100%', margin: '0 auto', padding: '16px 14px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {/* Scrollable Feed Body */}
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          overflowY: 'auto',
+          width: '100%',
+        }}
+      >
+        <div style={{ maxWidth: 580, width: '100%', margin: '0 auto', padding: '16px 14px', display: 'flex', flexDirection: 'column', gap: 14 }}>
         {/* Post Composer */}
         <form
           onSubmit={handleCreatePost}
@@ -675,6 +715,7 @@ export const StoryFeedView: React.FC<StoryFeedViewProps> = ({
             </React.Fragment>
           );
         }))}
+      </div>
       </div>
     </div>
   );

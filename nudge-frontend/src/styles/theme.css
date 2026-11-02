@@ -240,3 +240,12 @@ input, textarea {
     opacity: 0;
   }
 }
+
+.stories-tray-scroll {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.stories-tray-scroll::-webkit-scrollbar {
+  display: none;
+}
